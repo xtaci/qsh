@@ -30,10 +30,10 @@ Quick Start
 	qsh server -l :2323 -c client-1=/etc/qsh/id_hppk.pub
 	```
 
-3. Connect from the client:
+3. Connect from the client (client mode is the default when no subcommand is provided):
 
 	```bash
-	qsh client -identity ./id_hppk -id client-1 203.0.113.10:2323
+	qsh -i ./id_hppk -n client-1 203.0.113.10:2323
 	```
 
 Protocol Highlights
