@@ -33,28 +33,29 @@ import (
 
 // sessionKeyBytes defines how many bytes of keying material we derive for each
 // QPP pad direction.
-const sessionKeyBytes = 32
+const sessionKeyBytes = 128
 const qppPadCount uint16 = 1019
 
 const (
 	encryptedKeyType = "encrypted-hppk"
 	exampleGenKey    = "qsh genkey -o ./id_hppk"
 	exampleServer    = "qsh server -l :2323 -c client-1=/etc/qsh/id_hppk.pub"
-	exampleClient    = "qsh client -identity ./id_hppk -id client-1 127.0.0.1:2323"
+	exampleClient    = "qsh -i ./id_hppk -n client-1 127.0.0.1:2323"
 )
 
 // main dispatches between key generation, server mode, and client mode.
 func main() {
 	app := &cli.App{
 		Name:  "qsh",
-		Usage: "Secure remote shell using HPPK authentication and QPP encryption",
+		Usage: "Secure remote shell using HPPK authentication and QPP encryption (client by default)",
+		Flags: clientCLIFlags(),
 		Commands: []*cli.Command{
 			{
 				Name:  "genkey",
 				Usage: "Generate an HPPK keypair",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "path for the private key (public key stored as path.pub)", Required: true},
-					&cli.IntFlag{Name: "strength", Value: 8, Usage: "security parameter passed to HPPK key generation"},
+					&cli.IntFlag{Name: "strength", Aliases: []string{"s"}, Value: 8, Usage: "security parameter passed to HPPK key generation"},
 				},
 				Action: runGenKeyCommand,
 			},
@@ -67,24 +68,19 @@ func main() {
 				},
 				Action: runServerCommand,
 			},
-			{
-				Name:  "client",
-				Usage: "Connect to a qsh server",
-				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "identity", Value: "./id_hppk", Usage: "path to the HPPK private key"},
-					&cli.StringFlag{Name: "id", Value: "client-1", Usage: "client identifier presented during authentication"},
-				},
-				Action: runClientCommand,
-			},
 		},
-		Action: func(c *cli.Context) error {
-			_ = cli.ShowAppHelp(c)
-			return cli.Exit("please specify a subcommand (genkey, server, client)", 1)
-		},
+		Action: runClientCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func clientCLIFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
+		&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
 	}
 }
 
@@ -155,8 +151,12 @@ func runServerCommand(c *cli.Context) error {
 
 func runClientCommand(c *cli.Context) error {
 	if c.NArg() != 1 {
-		_ = cli.ShowCommandHelp(c, c.Command.Name)
-		return exitWithExample("client command requires the remote address", exampleClient)
+		if c.Command != nil && c.Command.Name == "client" {
+			_ = cli.ShowCommandHelp(c, c.Command.Name)
+		} else {
+			_ = cli.ShowAppHelp(c)
+		}
+		return exitWithExample("client mode requires the remote address", exampleClient)
 	}
 	identity := c.String("identity")
 	if identity == "" {
