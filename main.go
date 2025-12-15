@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	cli "github.com/urfave/cli/v2"
 	"github.com/xtaci/hppk"
 	"github.com/xtaci/qpp"
 	"github.com/xtaci/qsh/protocol"
@@ -31,61 +31,54 @@ import (
 // QPP pad direction.
 const sessionKeyBytes = 32
 
-var (
-	flagServerAddr     = flag.String("s", "", "server mode: listen address (e.g. :2323)")
-	flagIdentity       = flag.String("identity", "./id_hppk", "client mode: path to HPPK private key")
-	flagClientID       = flag.String("id", "client-1", "client identifier presented during authentication")
-	flagPads           = flag.Int("pads", 977, "server mode: number of QPP pads (prime recommended)")
-	flagGenKeyPath     = flag.String("genkey", "", "generate an HPPK keypair at the provided path (writes path and path.pub)")
-	flagGenKeyStrength = flag.Int("genkey-strength", 8, "security parameter passed to HPPK key generation")
-	allowedClients     clientFlagList
+const (
+	exampleGenKey = "qsh genkey -o ./id_hppk"
+	exampleServer = "qsh server -l :2323 -pads 977 -c client-1=/etc/qsh/id_hppk.pub"
+	exampleClient = "qsh client -identity ./id_hppk -id client-1 127.0.0.1:2323"
 )
-
-func init() {
-	flag.Var(&allowedClients, "client", "server mode: allowed client entry in the form id=/path/to/id_hppk.pub (repeatable)")
-}
 
 // main dispatches between key generation, server mode, and client mode.
 func main() {
-	flag.Parse()
-
-	if *flagGenKeyPath != "" {
-		if err := generateKeyPair(*flagGenKeyPath, *flagGenKeyStrength); err != nil {
-			log.Fatal(err)
-		}
-		return
+	app := &cli.App{
+		Name:  "qsh",
+		Usage: "Secure remote shell using HPPK authentication and QPP encryption",
+		Commands: []*cli.Command{
+			{
+				Name:  "genkey",
+				Usage: "Generate an HPPK keypair",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "path for the private key (public key stored as path.pub)", Required: true},
+					&cli.IntFlag{Name: "strength", Value: 8, Usage: "security parameter passed to HPPK key generation"},
+				},
+				Action: runGenKeyCommand,
+			},
+			{
+				Name:  "server",
+				Usage: "Run qsh in server mode",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "listen", Aliases: []string{"l"}, Usage: "listen address (e.g. :2323)", Required: true},
+					&cli.IntFlag{Name: "pads", Value: 977, Usage: "number of QPP pads (prime recommended)"},
+					&cli.StringSliceFlag{Name: "client", Aliases: []string{"c"}, Usage: "allowed client entry in the form id=/path/to/id_hppk.pub (repeatable)"},
+				},
+				Action: runServerCommand,
+			},
+			{
+				Name:  "client",
+				Usage: "Connect to a qsh server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "identity", Value: "./id_hppk", Usage: "path to the HPPK private key"},
+					&cli.StringFlag{Name: "id", Value: "client-1", Usage: "client identifier presented during authentication"},
+				},
+				Action: runClientCommand,
+			},
+		},
+		Action: func(c *cli.Context) error {
+			_ = cli.ShowAppHelp(c)
+			return cli.Exit("please specify a subcommand (genkey, server, client)", 1)
+		},
 	}
 
-	if *flagServerAddr != "" {
-		pads := validatePads(*flagPads)
-		if len(allowedClients.entries) == 0 {
-			log.Fatal("server mode requires at least one -client entry")
-		}
-		registry, err := loadClientRegistry(allowedClients.entries)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err := runServer(*flagServerAddr, pads, registry); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	if flag.NArg() != 1 {
-		fmt.Println("usage:")
-		fmt.Println("  qsh -s ip:port -pads 977 -client client-1=/path/to/id_hppk.pub")
-		fmt.Println("  qsh [flags] ip:port")
-		fmt.Println("  qsh -genkey ./id_hppk")
-		flag.PrintDefaults()
-		return
-	}
-
-	priv, err := loadPrivateKey(*flagIdentity)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := runClient(flag.Arg(0), priv, *flagClientID); err != nil {
+	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -96,41 +89,87 @@ type clientEntry struct {
 	path string
 }
 
-// clientFlagList collects repeated -client flags.
-type clientFlagList struct {
-	entries []clientEntry
+func parseClientEntries(values []string) ([]clientEntry, error) {
+	var entries []clientEntry
+	for _, value := range values {
+		parts := strings.SplitN(value, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid client entry %q (expected id=/path/to/key)", value)
+		}
+		id := strings.TrimSpace(parts[0])
+		path := strings.TrimSpace(parts[1])
+		if id == "" || path == "" {
+			return nil, fmt.Errorf("invalid client entry %q", value)
+		}
+		entries = append(entries, clientEntry{id: id, path: path})
+	}
+	return entries, nil
 }
 
-// String implements flag.Value for human-readable diagnostics.
-func (l *clientFlagList) String() string {
-	var parts []string
-	for _, entry := range l.entries {
-		parts = append(parts, fmt.Sprintf("%s=%s", entry.id, entry.path))
+func runGenKeyCommand(c *cli.Context) error {
+	path := c.String("output")
+	if path == "" {
+		return exitWithExample("genkey command requires --output", exampleGenKey)
 	}
-	return strings.Join(parts, ",")
-}
-
-// Set parses "id=path" pairs supplied via repeated -client flags.
-func (l *clientFlagList) Set(value string) error {
-	parts := strings.SplitN(value, "=", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid client entry %q (expected id=/path/to/key)", value)
+	strength := c.Int("strength")
+	if strength <= 0 {
+		return exitWithExample("--strength must be a positive integer", exampleGenKey)
 	}
-	id := strings.TrimSpace(parts[0])
-	path := strings.TrimSpace(parts[1])
-	if id == "" || path == "" {
-		return fmt.Errorf("invalid client entry %q", value)
+	if err := generateKeyPair(path, strength); err != nil {
+		return fmt.Errorf("%w\nExample: %s", err, exampleGenKey)
 	}
-	l.entries = append(l.entries, clientEntry{id: id, path: path})
 	return nil
 }
 
-// validatePads ensures the pad count fits inside a uint16 accepted by QPP.
-func validatePads(v int) uint16 {
-	if v <= 0 || v > 0xFFFF {
-		log.Fatalf("invalid pad count %d", v)
+func runServerCommand(c *cli.Context) error {
+	addr := c.String("listen")
+	if addr == "" {
+		return exitWithExample("server command requires --listen", exampleServer)
 	}
-	return uint16(v)
+	pads, err := validatePads(c.Int("pads"))
+	if err != nil {
+		return exitWithExample(err.Error(), exampleServer)
+	}
+	entries, err := parseClientEntries(c.StringSlice("client"))
+	if err != nil {
+		return exitWithExample(err.Error(), exampleServer)
+	}
+	if len(entries) == 0 {
+		return exitWithExample("server command requires at least one --client entry", exampleServer)
+	}
+	registry, err := loadClientRegistry(entries)
+	if err != nil {
+		return err
+	}
+	return runServer(addr, pads, registry)
+}
+
+func runClientCommand(c *cli.Context) error {
+	if c.NArg() != 1 {
+		_ = cli.ShowCommandHelp(c, c.Command.Name)
+		return exitWithExample("client command requires the remote address", exampleClient)
+	}
+	identity := c.String("identity")
+	if identity == "" {
+		return exitWithExample("client command requires --identity", exampleClient)
+	}
+	priv, err := loadPrivateKey(identity)
+	if err != nil {
+		return fmt.Errorf("%w\nExample: %s", err, exampleClient)
+	}
+	return runClient(c.Args().First(), priv, c.String("id"))
+}
+
+func exitWithExample(message, example string) error {
+	return cli.Exit(fmt.Sprintf("%s\nExample: %s", message, example), 1)
+}
+
+// validatePads ensures the pad count fits inside a uint16 accepted by QPP.
+func validatePads(v int) (uint16, error) {
+	if v <= 0 || v > 0xFFFF {
+		return 0, fmt.Errorf("invalid pad count %d", v)
+	}
+	return uint16(v), nil
 }
 
 // ============================= SERVER =============================
