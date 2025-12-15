@@ -445,8 +445,12 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if keySize <= 0 {
 		keySize = sessionKeyBytes
 	}
+	secretBytes := secret.Bytes()
+	if len(secretBytes) > keySize {
+		return nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
+	}
 	masterSeed := make([]byte, keySize)
-	secret.FillBytes(masterSeed)
+	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
 
 	sig, err := priv.Sign(challenge.Challenge)
 	if err != nil {
