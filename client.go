@@ -1,0 +1,217 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"math/big"
+	"net"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+
+	cli "github.com/urfave/cli/v2"
+	"github.com/xtaci/hppk"
+	"github.com/xtaci/qpp"
+	"github.com/xtaci/qsh/protocol"
+	"golang.org/x/term"
+)
+
+func runClientCommand(c *cli.Context) error {
+	if c.NArg() != 1 {
+		if c.Command != nil && c.Command.Name == "client" {
+			_ = cli.ShowCommandHelp(c, c.Command.Name)
+		} else {
+			_ = cli.ShowAppHelp(c)
+		}
+		return exitWithExample("client mode requires the remote address", exampleClient)
+	}
+	identity := c.String("identity")
+	if identity == "" {
+		return exitWithExample("client command requires --identity", exampleClient)
+	}
+	priv, err := loadPrivateKey(identity)
+	if err != nil {
+		return fmt.Errorf("%w\nExample: %s", err, exampleClient)
+	}
+	if err := runClient(c.Args().First(), priv, c.String("id")); err != nil {
+		if isIdentityError(err) {
+			return fmt.Errorf("client connection failed (verify identity %s): %v", identity, err)
+		}
+		return fmt.Errorf("client connection failed: %v", err)
+	}
+	return nil
+}
+
+func isIdentityError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "handshake") ||
+		strings.Contains(msg, "cipher") ||
+		strings.Contains(msg, "authentication") ||
+		strings.Contains(msg, "passphrase") ||
+		strings.Contains(msg, "decrypt")
+}
+
+// runClient dials the server, completes the handshake, and attaches local TTY IO.
+func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	writer, recvQPP, err := performClientHandshake(conn, priv, clientID)
+	if err != nil {
+		return err
+	}
+
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err == nil {
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+	}
+
+	rows, cols := getWinsize()
+	_ = writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
+
+	done := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(done) }) }
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- forwardStdIn(writer) }()
+	go func() { errCh <- readServerOutput(conn, recvQPP) }()
+	go handleClientResize(writer, done)
+
+	err = <-errCh
+	conn.Close()
+	stop()
+	return err
+}
+
+// performClientHandshake mirrors the server handshake and prepares stream pads.
+func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string) (*encryptedWriter, *qpp.QuantumPermutationPad, error) {
+	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID}}); err != nil {
+		return nil, nil, err
+	}
+	env := &protocol.Envelope{}
+	if err := protocol.ReadMessage(conn, env); err != nil {
+		return nil, nil, err
+	}
+	challenge := env.AuthChallenge
+	if challenge == nil {
+		return nil, nil, errors.New("handshake: expected challenge")
+	}
+	kem := &hppk.KEM{P: new(big.Int).SetBytes(challenge.KemP), Q: new(big.Int).SetBytes(challenge.KemQ)}
+	secret, err := priv.Decrypt(kem)
+	if err != nil {
+		return nil, nil, err
+	}
+	keySize := int(challenge.SessionKeySize)
+	if keySize <= 0 {
+		keySize = sessionKeyBytes
+	}
+	secretBytes := secret.Bytes()
+	if len(secretBytes) > keySize {
+		return nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
+	}
+	masterSeed := make([]byte, keySize)
+	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
+
+	sig, err := priv.Sign(challenge.Challenge)
+	if err != nil {
+		return nil, nil, err
+	}
+	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: signatureToProto(sig)}}
+	if err := protocol.WriteMessage(conn, response); err != nil {
+		return nil, nil, err
+	}
+	env = &protocol.Envelope{}
+	if err := protocol.ReadMessage(conn, env); err != nil {
+		return nil, nil, err
+	}
+	if env.AuthResult == nil || !env.AuthResult.Success {
+		msg := "authentication failed"
+		if env.AuthResult != nil && env.AuthResult.Message != "" {
+			msg = env.AuthResult.Message
+		}
+		return nil, nil, errors.New(msg)
+	}
+
+	pads := uint16(challenge.Pads)
+	if pads == 0 {
+		pads = qppPadCount
+	}
+	if pads != qppPadCount {
+		return nil, nil, fmt.Errorf("unsupported pad count %d (expected %d)", pads, qppPadCount)
+	}
+	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
+	if err != nil {
+		return nil, nil, err
+	}
+	s2cSeed, err := deriveDirectionalSeed(masterSeed, "qsh-s2c")
+	if err != nil {
+		return nil, nil, err
+	}
+	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads))
+	recv := qpp.NewQPP(s2cSeed, pads)
+	return writer, recv, nil
+}
+
+// forwardStdIn encrypts and forwards local keystrokes to the server.
+func forwardStdIn(writer *encryptedWriter) error {
+	buf := make([]byte, 4096)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			if sendErr := writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
+				return sendErr
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// readServerOutput decrypts server payloads and writes them to stdout.
+func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad) error {
+	for {
+		payload, err := receivePayload(conn, recvQPP)
+		if err != nil {
+			return err
+		}
+		if len(payload.Stream) > 0 {
+			if _, err := os.Stdout.Write(payload.Stream); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// handleClientResize pushes terminal size updates to the remote PTY.
+func handleClientResize(writer *encryptedWriter, done <-chan struct{}) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGWINCH)
+	defer signal.Stop(sigCh)
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-sigCh:
+			rows, cols := getWinsize()
+			_ = writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
+		}
+	}
+}
+
+// getWinsize returns the caller TTY dimensions, falling back to 80x24.
+func getWinsize() (rows, cols uint16) {
+	w, h, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil {
+		return 24, 80
+	}
+	return uint16(h), uint16(w)
+}
