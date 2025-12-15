@@ -79,7 +79,7 @@ func runGenKeyCommand(c *cli.Context) error {
 	if len(pass) == 0 {
 		return exitWithExample("passphrase cannot be empty", exampleGenKey)
 	}
-	defer zeroBytes(pass)
+	defer clear(pass)
 	if err := generateKeyPair(path, strength, pass); err != nil {
 		return fmt.Errorf("%w\nExample: %s", err, exampleGenKey)
 	}

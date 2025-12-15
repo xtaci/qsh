@@ -16,8 +16,6 @@ import (
 	"golang.org/x/term"
 )
 
-// ============================= SHARED HELPERS =============================
-
 // loadPrivateKey reads an HPPK private key and decrypts it if needed.
 func loadPrivateKey(path string) (*hppk.PrivateKey, error) {
 	data, err := os.ReadFile(path)
@@ -33,7 +31,7 @@ func loadPrivateKey(path string) (*hppk.PrivateKey, error) {
 		if len(pass) == 0 {
 			return nil, errors.New("passphrase required to decrypt private key")
 		}
-		defer zeroBytes(pass)
+		defer clear(pass)
 		plain, err := decryptPrivateKey(&encrypted, pass)
 		if err != nil {
 			return nil, err
@@ -107,6 +105,7 @@ func writeJSONFile(path string, perm os.FileMode, v any) error {
 	return enc.Encode(v)
 }
 
+// encryptedKeyType defines the fromat of encrypted private key files.
 type encryptedKeyFile struct {
 	Type       string          `json:"type"`
 	Version    int             `json:"version"`
@@ -127,6 +126,7 @@ const (
 	scryptCostP = 1
 )
 
+// encryptPrivateKey encrypts an HPPK private key using the given passphrase.
 func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyFile, error) {
 	if len(passphrase) == 0 {
 		return nil, errors.New("empty passphrase not allowed")
@@ -139,7 +139,7 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 	if err != nil {
 		return nil, err
 	}
-	defer zeroBytes(key)
+	defer clear(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 		return nil, err
 	}
 	ciphertext := gcm.Seal(nil, nonce, plain, nil)
-	zeroBytes(plain)
+	clear(plain)
 	return &encryptedKeyFile{
 		Type:       encryptedKeyType,
 		Version:    1,
@@ -172,6 +172,7 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 	}, nil
 }
 
+// decryptPrivateKey decrypts an encrypted private key file using the given passphrase.
 func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error) {
 	if enc.KDF != kdfName {
 		return nil, fmt.Errorf("unsupported kdf %s", enc.KDF)
@@ -190,7 +191,7 @@ func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	defer zeroBytes(key)
+	defer clear(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -209,6 +210,7 @@ func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error)
 	return plain, nil
 }
 
+// promptPassword prompts the user for a password, optionally confirming it.
 func promptPassword(prompt string, confirm bool) ([]byte, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	pass, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -221,22 +223,16 @@ func promptPassword(prompt string, confirm bool) ([]byte, error) {
 		confirmPass, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
-			zeroBytes(pass)
-			zeroBytes(confirmPass)
+			clear(pass)
+			clear(confirmPass)
 			return nil, err
 		}
 		if !bytes.Equal(pass, confirmPass) {
-			zeroBytes(pass)
-			zeroBytes(confirmPass)
+			clear(pass)
+			clear(confirmPass)
 			return nil, errors.New("passphrases do not match")
 		}
-		zeroBytes(confirmPass)
+		clear(confirmPass)
 	}
 	return pass, nil
-}
-
-func zeroBytes(buf []byte) {
-	for i := range buf {
-		buf[i] = 0
-	}
 }
