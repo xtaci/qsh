@@ -18,6 +18,7 @@ import (
 	"golang.org/x/term"
 )
 
+// runClientCommand handles the default command execution(client mode).
 func runClientCommand(c *cli.Context) error {
 	if c.NArg() != 1 {
 		if c.Command != nil && c.Command.Name == "client" {
@@ -27,6 +28,8 @@ func runClientCommand(c *cli.Context) error {
 		}
 		return exitWithExample("client mode requires the remote address", exampleClient)
 	}
+
+	// Load client identity private key.
 	identity := c.String("identity")
 	if identity == "" {
 		return exitWithExample("client command requires --identity", exampleClient)
@@ -35,6 +38,8 @@ func runClientCommand(c *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w\nExample: %s", err, exampleClient)
 	}
+
+	// Run client connection with the private key
 	if err := runClient(c.Args().First(), priv, c.String("id")); err != nil {
 		if isIdentityError(err) {
 			return fmt.Errorf("client connection failed (verify identity %s): %v", identity, err)
@@ -44,6 +49,7 @@ func runClientCommand(c *cli.Context) error {
 	return nil
 }
 
+// isIdentityError checks if the error is likely due to identity/key issues.
 func isIdentityError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "handshake") ||
@@ -55,22 +61,26 @@ func isIdentityError(err error) bool {
 
 // runClient dials the server, completes the handshake, and attaches local TTY IO.
 func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
+	// Connect to server
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
+	// Perform handshake
 	writer, recvQPP, err := performClientHandshake(conn, priv, clientID)
 	if err != nil {
 		return err
 	}
 
+	// Set terminal to raw mode
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err == nil {
 		defer term.Restore(int(os.Stdin.Fd()), oldState)
 	}
 
+	// Send initial terminal size
 	rows, cols := getWinsize()
 	_ = writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 
@@ -78,23 +88,29 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	var once sync.Once
 	stop := func() { once.Do(func() { close(done) }) }
 
+	// Start terminal resize handler goroutine
+	go handleClientResize(writer, done)
+
+	// Start IO forwarding
 	errCh := make(chan error, 2)
 	go func() { errCh <- forwardStdIn(writer) }()
 	go func() { errCh <- readServerOutput(conn, recvQPP) }()
-	go handleClientResize(writer, done)
 
+	// Wait for any IO error
 	err = <-errCh
-	conn.Close()
 	stop()
 	return err
 }
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
 func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string) (*encryptedWriter, *qpp.QuantumPermutationPad, error) {
+	// Send ClientHello
 	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID}}); err != nil {
 		return nil, nil, err
 	}
 	env := &protocol.Envelope{}
+
+	// Receive AuthChallenge
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return nil, nil, err
 	}
@@ -102,6 +118,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if challenge == nil {
 		return nil, nil, errors.New("handshake: expected challenge")
 	}
+
+	// Decrypt KEM and derive master seed
 	kem := &hppk.KEM{P: new(big.Int).SetBytes(challenge.KemP), Q: new(big.Int).SetBytes(challenge.KemQ)}
 	secret, err := priv.Decrypt(kem)
 	if err != nil {
@@ -115,9 +133,12 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if len(secretBytes) > keySize {
 		return nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
 	}
+
+	// Left-pad secret to fixed length master seed
 	masterSeed := make([]byte, keySize)
 	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
 
+	// Sign challenge and send AuthResponse
 	sig, err := priv.Sign(challenge.Challenge)
 	if err != nil {
 		return nil, nil, err
@@ -126,6 +147,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if err := protocol.WriteMessage(conn, response); err != nil {
 		return nil, nil, err
 	}
+
+	// Receive AuthResult
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return nil, nil, err
@@ -138,6 +161,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, nil, errors.New(msg)
 	}
 
+	// Prepare QPP pads
 	pads := uint16(challenge.Pads)
 	if pads == 0 {
 		pads = qppPadCount
@@ -145,6 +169,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if pads != qppPadCount {
 		return nil, nil, fmt.Errorf("unsupported pad count %d (expected %d)", pads, qppPadCount)
 	}
+
+	// Derive directional seeds and create QPP instances
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
 		return nil, nil, err
@@ -153,6 +179,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Create encrypted writer and receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads))
 	recv := qpp.NewQPP(s2cSeed, pads)
 	return writer, recv, nil

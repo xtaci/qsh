@@ -113,6 +113,7 @@ func handleServerConn(conn net.Conn, registry clientRegistry) error {
 
 // performServerHandshake authenticates the client and derives QPP pads.
 func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
+	// Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
@@ -128,10 +129,13 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, fmt.Errorf("unknown client %s", clientID)
 	}
 
+	// Challenge client with random nonce
 	challenge := make([]byte, 48)
 	if _, err := rand.Read(challenge); err != nil {
 		return "", nil, nil, err
 	}
+
+	// Generate KEM for master secret
 	masterSeed := make([]byte, sessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
 		return "", nil, nil, err
@@ -141,6 +145,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
+	// Send AuthChallenge
 	challengeMsg := &protocol.Envelope{AuthChallenge: &protocol.AuthChallenge{
 		Challenge:      challenge,
 		KemP:           kem.P.Bytes(),
@@ -152,6 +157,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
+	// Receive AuthResponse with verify signature from client
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
@@ -177,6 +183,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
+	// Derive directional QPP seeds
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
 		return "", nil, nil, err
@@ -185,6 +192,8 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 	if err != nil {
 		return "", nil, nil, err
 	}
+
+	// Initialize encrypted writer and QPP receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, qppPadCount))
 	recv := qpp.NewQPP(c2sSeed, qppPadCount)
 
