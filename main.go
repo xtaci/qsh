@@ -166,7 +166,22 @@ func runClientCommand(c *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w\nExample: %s", err, exampleClient)
 	}
-	return runClient(c.Args().First(), priv, c.String("id"))
+	if err := runClient(c.Args().First(), priv, c.String("id")); err != nil {
+		if isIdentityError(err) {
+			return fmt.Errorf("client connection failed (verify identity %s): %v", identity, err)
+		}
+		return fmt.Errorf("client connection failed: %v", err)
+	}
+	return nil
+}
+
+func isIdentityError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "handshake") ||
+		strings.Contains(msg, "cipher") ||
+		strings.Contains(msg, "authentication") ||
+		strings.Contains(msg, "passphrase") ||
+		strings.Contains(msg, "decrypt")
 }
 
 func exitWithExample(message, example string) error {
