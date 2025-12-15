@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package qsh.protocol;
+
+option go_package = "github.com/xtaci/qsh/protocol";
+
+message Envelope {
+  oneof body {
+    ClientHello client_hello = 1;
+    AuthChallenge auth_challenge = 2;
+    AuthResponse auth_response = 3;
+    AuthResult auth_result = 4;
+    SecureData secure_data = 5;
+  }
+}
+
+message ClientHello {
+  string client_id = 1;
+}
+
+message AuthChallenge {
+  bytes challenge = 1;
+  bytes kem_p = 2;
+  bytes kem_q = 3;
+  uint32 pads = 4;
+  uint32 session_key_size = 5;
+}
+
+message Signature {
+  bytes beta = 1;
+  bytes f = 2;
+  bytes h = 3;
+  bytes s1_verify = 4;
+  bytes s2_verify = 5;
+  repeated bytes u = 6;
+  repeated bytes v = 7;
+  uint32 k = 8;
+}
+
+message AuthResponse {
+  string client_id = 1;
+  Signature signature = 2;
+}
+
+message AuthResult {
+  bool success = 1;
+  string message = 2;
+}
+
+message SecureData {
+  bytes ciphertext = 1;
+}
+
+message PlainPayload {
+  oneof payload {
+    bytes stream = 1;
+    Resize resize = 2;
+  }
+}
+
+message Resize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
