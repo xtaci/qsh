@@ -1,5 +1,6 @@
-qsh(under development, do not use now)
+qsh
 ===
+Status: Developing
 
 Overview
 --------
