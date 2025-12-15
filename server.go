@@ -135,6 +135,11 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
+	padCount, err := randomPrimePadCount()
+	if err != nil {
+		return "", nil, nil, err
+	}
+
 	// Generate KEM for master secret
 	masterSeed := make([]byte, sessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
@@ -150,14 +155,14 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		Challenge:      challenge,
 		KemP:           kem.P.Bytes(),
 		KemQ:           kem.Q.Bytes(),
-		Pads:           uint32(qppPadCount),
+		Pads:           uint32(padCount),
 		SessionKeySize: sessionKeyBytes,
 	}}
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
 		return "", nil, nil, err
 	}
 
-	// Receive AuthResponse with verify signature from client
+	// Receive AuthResponse
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
@@ -175,6 +180,8 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		_ = sendAuthResult(conn, false, "invalid signature payload")
 		return "", nil, nil, fmt.Errorf("decode signature: %w", err)
 	}
+
+	// Verify signature over challenge
 	if !hppk.VerifySignature(sig, challenge, pub) {
 		_ = sendAuthResult(conn, false, "signature verification failed")
 		return "", nil, nil, errors.New("handshake: signature verification failed")
@@ -194,8 +201,8 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 	}
 
 	// Initialize encrypted writer and QPP receiver
-	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, qppPadCount))
-	recv := qpp.NewQPP(c2sSeed, qppPadCount)
+	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount))
+	recv := qpp.NewQPP(c2sSeed, padCount)
 
 	return clientID, writer, recv, nil
 }

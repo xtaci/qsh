@@ -11,7 +11,6 @@ import (
 // sessionKeyBytes defines how many bytes of keying material we derive for each
 // QPP pad direction.
 const sessionKeyBytes = 256
-const qppPadCount uint16 = 1019
 
 const (
 	encryptedKeyType = "encrypted-hppk"

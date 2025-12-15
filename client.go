@@ -163,11 +163,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 
 	// Prepare QPP pads
 	pads := uint16(challenge.Pads)
-	if pads == 0 {
-		pads = qppPadCount
-	}
-	if pads != qppPadCount {
-		return nil, nil, fmt.Errorf("unsupported pad count %d (expected %d)", pads, qppPadCount)
+	if !validatePadCount(pads) {
+		return nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, minPadCount, maxPadCount)
 	}
 
 	// Derive directional seeds and create QPP instances
