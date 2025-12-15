@@ -9,37 +9,37 @@ Overview
 Key Features
 ------------
 - **Strong authentication** – servers whitelist client IDs and verify HPPK signatures produced during the handshake.
-- **Encrypted tunnel** – both directions derive unique pads via HKDF and feed them into QPP to protect PTY traffic.
+- **Encrypted tunnel** – both directions derive unique pads via HKDF and feed them into QPP, using a fixed prime pad count (1019) agreed by both peers.
 - **Proto-framed control channel** – all signaling (hello, challenges, resize notices, encrypted data) rides over a length-prefixed protobuf envelope defined in `protocol/`.
 - **True terminal UX** – the server spawns a PTY via `/bin/sh`, mirrors stdout/stderr, and honors window resize events.
-- **Built-in key management** – run `qsh -genkey <path>` to create JSON-encoded private/public key files usable by the client and server.
+- **Built-in key management** – run `qsh genkey -o <path>` to create JSON-encoded private/public key files (private halves are encrypted with a passphrase).
 
 Quick Start
 -----------
 1. Generate keys (run once):
 
 	```bash
-	qsh -genkey ./id_hppk
+	qsh genkey -o ./id_hppk
 	```
 
-	Copy `id_hppk.pub` to the server and reference it via `-client client-1=/path/to/id_hppk.pub`.
+	Copy `id_hppk.pub` to the server and reference it via `-c client-1=/path/to/id_hppk.pub`.
 
 2. Start the server:
 
 	```bash
-	qsh -s :2323 -pads 977 -client client-1=/etc/qsh/id_hppk.pub
+	qsh server -l :2323 -c client-1=/etc/qsh/id_hppk.pub
 	```
 
 3. Connect from the client:
 
 	```bash
-	qsh -identity ./id_hppk -id client-1 203.0.113.10:2323
+	qsh client -identity ./id_hppk -id client-1 203.0.113.10:2323
 	```
 
 Protocol Highlights
 -------------------
 1. **ClientHello** – announces a client ID.
-2. **AuthChallenge** – server returns a random challenge, KEM-wrapped session seed, and pad parameters.
+2. **AuthChallenge** – server returns a random challenge, KEM-wrapped session seed, and the fixed pad count (1019).
 3. **AuthResponse** – client signs the challenge with its HPPK private key and proves possession.
 4. **AuthResult** – server verifies the signature before both sides derive directional seeds (`qsh-c2s`, `qsh-s2c`) via HKDF and instantiate QPP pads.
 5. **Secure streaming** – plaintext PTY data and resize events are wrapped inside `PlainPayload`, encrypted into `SecureData`, and exchanged until either side disconnects.

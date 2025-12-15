@@ -34,11 +34,12 @@ import (
 // sessionKeyBytes defines how many bytes of keying material we derive for each
 // QPP pad direction.
 const sessionKeyBytes = 32
+const qppPadCount uint16 = 1019
 
 const (
 	encryptedKeyType = "encrypted-hppk"
 	exampleGenKey    = "qsh genkey -o ./id_hppk"
-	exampleServer    = "qsh server -l :2323 -pads 977 -c client-1=/etc/qsh/id_hppk.pub"
+	exampleServer    = "qsh server -l :2323 -c client-1=/etc/qsh/id_hppk.pub"
 	exampleClient    = "qsh client -identity ./id_hppk -id client-1 127.0.0.1:2323"
 )
 
@@ -62,7 +63,6 @@ func main() {
 				Usage: "Run qsh in server mode",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "listen", Aliases: []string{"l"}, Usage: "listen address (e.g. :2323)", Required: true},
-					&cli.IntFlag{Name: "pads", Value: 977, Usage: "number of QPP pads (prime recommended)"},
 					&cli.StringSliceFlag{Name: "client", Aliases: []string{"c"}, Usage: "allowed client entry in the form id=/path/to/id_hppk.pub (repeatable)"},
 				},
 				Action: runServerCommand,
@@ -139,10 +139,6 @@ func runServerCommand(c *cli.Context) error {
 	if addr == "" {
 		return exitWithExample("server command requires --listen", exampleServer)
 	}
-	pads, err := validatePads(c.Int("pads"))
-	if err != nil {
-		return exitWithExample(err.Error(), exampleServer)
-	}
 	entries, err := parseClientEntries(c.StringSlice("client"))
 	if err != nil {
 		return exitWithExample(err.Error(), exampleServer)
@@ -154,7 +150,7 @@ func runServerCommand(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	return runServer(addr, pads, registry)
+	return runServer(addr, registry)
 }
 
 func runClientCommand(c *cli.Context) error {
@@ -177,14 +173,6 @@ func exitWithExample(message, example string) error {
 	return cli.Exit(fmt.Sprintf("%s\nExample: %s", message, example), 1)
 }
 
-// validatePads ensures the pad count fits inside a uint16 accepted by QPP.
-func validatePads(v int) (uint16, error) {
-	if v <= 0 || v > 0xFFFF {
-		return 0, fmt.Errorf("invalid pad count %d", v)
-	}
-	return uint16(v), nil
-}
-
 // ============================= SERVER =============================
 
 // clientRegistry maps client IDs onto their trusted public keys.
@@ -204,7 +192,7 @@ func loadClientRegistry(entries []clientEntry) (clientRegistry, error) {
 }
 
 // runServer accepts TCP clients and performs the secure handshake per session.
-func runServer(addr string, pads uint16, registry clientRegistry) error {
+func runServer(addr string, registry clientRegistry) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -218,7 +206,7 @@ func runServer(addr string, pads uint16, registry clientRegistry) error {
 			continue
 		}
 		go func() {
-			if err := handleServerConn(conn, pads, registry); err != nil {
+			if err := handleServerConn(conn, registry); err != nil {
 				log.Printf("connection closed: %v", err)
 			}
 		}()
@@ -226,9 +214,9 @@ func runServer(addr string, pads uint16, registry clientRegistry) error {
 }
 
 // handleServerConn runs the handshake and launches the PTY bridge for a client.
-func handleServerConn(conn net.Conn, pads uint16, registry clientRegistry) error {
+func handleServerConn(conn net.Conn, registry clientRegistry) error {
 	defer conn.Close()
-	clientID, writer, recvQPP, err := performServerHandshake(conn, pads, registry)
+	clientID, writer, recvQPP, err := performServerHandshake(conn, registry)
 	if err != nil {
 		return err
 	}
@@ -237,7 +225,7 @@ func handleServerConn(conn net.Conn, pads uint16, registry clientRegistry) error
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, pads uint16, registry clientRegistry) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
+func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
@@ -270,7 +258,7 @@ func performServerHandshake(conn net.Conn, pads uint16, registry clientRegistry)
 		Challenge:      challenge,
 		KemP:           kem.P.Bytes(),
 		KemQ:           kem.Q.Bytes(),
-		Pads:           uint32(pads),
+		Pads:           uint32(qppPadCount),
 		SessionKeySize: sessionKeyBytes,
 	}}
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
@@ -310,8 +298,8 @@ func performServerHandshake(conn net.Conn, pads uint16, registry clientRegistry)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, pads))
-	recv := qpp.NewQPP(c2sSeed, pads)
+	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, qppPadCount))
+	recv := qpp.NewQPP(c2sSeed, qppPadCount)
 
 	return clientID, writer, recv, nil
 }
@@ -482,7 +470,10 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 
 	pads := uint16(challenge.Pads)
 	if pads == 0 {
-		pads = 977
+		pads = qppPadCount
+	}
+	if pads != qppPadCount {
+		return nil, nil, fmt.Errorf("unsupported pad count %d (expected %d)", pads, qppPadCount)
 	}
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
