@@ -10,7 +10,6 @@ import (
 
 // signatureToProto converts an HPPK signature into its protobuf equivalent.
 func signatureToProto(sig *hppk.Signature) *protocol.Signature {
-	// signatureToProto converts an HPPK signature into its protobuf equivalent.
 	if sig == nil {
 		return nil
 	}
@@ -39,7 +38,6 @@ func signatureToProto(sig *hppk.Signature) *protocol.Signature {
 
 // signatureFromProto rebuilds an HPPK signature from protobuf bytes.
 func signatureFromProto(msg *protocol.Signature) (*hppk.Signature, error) {
-	// signatureFromProto rebuilds an HPPK signature from protobuf bytes.
 	if msg == nil {
 		return nil, errors.New("missing signature payload")
 	}
@@ -67,7 +65,6 @@ func signatureFromProto(msg *protocol.Signature) (*hppk.Signature, error) {
 
 // bigIntToBytes safely serializes a big integer.
 func bigIntToBytes(v *big.Int) []byte {
-	// bigIntToBytes safely serializes a big integer.
 	if v == nil {
 		return nil
 	}
@@ -76,7 +73,6 @@ func bigIntToBytes(v *big.Int) []byte {
 
 // bytesToBigInt produces a big.Int even for nil/empty inputs.
 func bytesToBigInt(data []byte) *big.Int {
-	// bytesToBigInt produces a big.Int even for nil/empty inputs.
 	if len(data) == 0 {
 		return big.NewInt(0)
 	}
