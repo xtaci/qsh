@@ -27,6 +27,8 @@ import (
 	"golang.org/x/term"
 )
 
+// sessionKeyBytes defines how many bytes of keying material we derive for each
+// QPP pad direction.
 const sessionKeyBytes = 32
 
 var (
@@ -43,6 +45,7 @@ func init() {
 	flag.Var(&allowedClients, "client", "server mode: allowed client entry in the form id=/path/to/id_hppk.pub (repeatable)")
 }
 
+// main dispatches between key generation, server mode, and client mode.
 func main() {
 	flag.Parse()
 
@@ -87,6 +90,7 @@ func main() {
 	}
 }
 
+// clientEntry binds a client identifier to a local path containing its public key.
 type clientEntry struct {
 	id   string
 	path string
@@ -97,6 +101,7 @@ type clientFlagList struct {
 	entries []clientEntry
 }
 
+// String implements flag.Value for human-readable diagnostics.
 func (l *clientFlagList) String() string {
 	var parts []string
 	for _, entry := range l.entries {
@@ -105,6 +110,7 @@ func (l *clientFlagList) String() string {
 	return strings.Join(parts, ",")
 }
 
+// Set parses "id=path" pairs supplied via repeated -client flags.
 func (l *clientFlagList) Set(value string) error {
 	parts := strings.SplitN(value, "=", 2)
 	if len(parts) != 2 {
@@ -119,6 +125,7 @@ func (l *clientFlagList) Set(value string) error {
 	return nil
 }
 
+// validatePads ensures the pad count fits inside a uint16 accepted by QPP.
 func validatePads(v int) uint16 {
 	if v <= 0 || v > 0xFFFF {
 		log.Fatalf("invalid pad count %d", v)
@@ -128,6 +135,7 @@ func validatePads(v int) uint16 {
 
 // ============================= SERVER =============================
 
+// clientRegistry maps client IDs onto their trusted public keys.
 type clientRegistry map[string]*hppk.PublicKey
 
 // loadClientRegistry loads each allowed client's public key once at startup.
@@ -165,6 +173,7 @@ func runServer(addr string, pads uint16, registry clientRegistry) error {
 	}
 }
 
+// handleServerConn runs the handshake and launches the PTY bridge for a client.
 func handleServerConn(conn net.Conn, pads uint16, registry clientRegistry) error {
 	defer conn.Close()
 	clientID, writer, recvQPP, err := performServerHandshake(conn, pads, registry)
@@ -255,6 +264,7 @@ func performServerHandshake(conn net.Conn, pads uint16, registry clientRegistry)
 	return clientID, writer, recv, nil
 }
 
+// sendAuthResult sends a simple AuthResult envelope to the peer.
 func sendAuthResult(conn net.Conn, ok bool, message string) error {
 	env := &protocol.Envelope{AuthResult: &protocol.AuthResult{Success: ok, Message: message}}
 	return protocol.WriteMessage(conn, env)
