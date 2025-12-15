@@ -13,6 +13,7 @@ const (
 
 var primePadCounts = generatePrimePadCounts()
 
+// generatePrimePadCounts generates a slice of prime numbers between minPadCount and maxPadCount.
 func generatePrimePadCounts() []uint16 {
 	var primes []uint16
 	for n := minPadCount; n <= maxPadCount; n++ {
@@ -23,6 +24,7 @@ func generatePrimePadCounts() []uint16 {
 	return primes
 }
 
+// isPrime checks if a number is prime.
 func isPrime(n int) bool {
 	if n < 2 {
 		return false
@@ -35,6 +37,7 @@ func isPrime(n int) bool {
 	return true
 }
 
+// randomPrimePadCount returns a random prime number between minPadCount and maxPadCount.
 func randomPrimePadCount() (uint16, error) {
 	if len(primePadCounts) == 0 {
 		return 0, errors.New("no prime pad counts available")
@@ -47,6 +50,7 @@ func randomPrimePadCount() (uint16, error) {
 	return primePadCounts[idx.Int64()], nil
 }
 
+// validatePadCount checks if the given pad count is a prime number within the valid range.
 func validatePadCount(p uint16) bool {
 	return int(p) >= minPadCount && int(p) <= maxPadCount && isPrime(int(p))
 }
