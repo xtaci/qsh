@@ -134,7 +134,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
 	}
 
-	// Left-pad secret to fixed length master seed
+	// As secret is a big.Int, it may be shorter than keySize bytes, so we left-pad with 0s
+	// to ensure consistent length
 	masterSeed := make([]byte, keySize)
 	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
 

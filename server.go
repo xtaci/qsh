@@ -118,10 +118,12 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
 	}
+
 	if env.ClientHello == nil {
 		_ = sendAuthResult(conn, false, "expected client hello")
 		return "", nil, nil, errors.New("handshake: missing client hello")
 	}
+
 	clientID := env.ClientHello.ClientId
 	pub, ok := registry[clientID]
 	if !ok {
@@ -140,17 +142,20 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
-	// Generate KEM for master secret
+	// Generate KEM for master secret.
+	// NOTE(x): the length of masterSeed must match sessionKeyBytes,
+	// 	and the length of the key should be sent to the client.
 	masterSeed := make([]byte, sessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
 		return "", nil, nil, err
 	}
+
 	kem, err := hppk.Encrypt(pub, masterSeed)
 	if err != nil {
 		return "", nil, nil, err
 	}
 
-	// Send AuthChallenge
+	// Send session key and challenge to client
 	challengeMsg := &protocol.Envelope{AuthChallenge: &protocol.AuthChallenge{
 		Challenge:      challenge,
 		KemP:           kem.P.Bytes(),
@@ -158,23 +163,27 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		Pads:           uint32(padCount),
 		SessionKeySize: sessionKeyBytes,
 	}}
+
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
 		return "", nil, nil, err
 	}
 
-	// Receive AuthResponse
+	// Receive AuthResponse and decode signature
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
 	}
+
 	if env.AuthResponse == nil {
 		_ = sendAuthResult(conn, false, "expected auth response")
 		return "", nil, nil, errors.New("handshake: missing auth response")
 	}
+
 	if env.AuthResponse.ClientId != clientID {
 		_ = sendAuthResult(conn, false, "client id mismatch")
 		return "", nil, nil, errors.New("handshake: client id mismatch")
 	}
+
 	sig, err := signatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
 		_ = sendAuthResult(conn, false, "invalid signature payload")
