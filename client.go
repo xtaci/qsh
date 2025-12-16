@@ -90,10 +90,8 @@ func isIdentityError(err error) bool {
 
 // clientSession bundles the encryption primitives established during the client handshake.
 type clientSession struct {
-	Conn       net.Conn
-	Writer     *encryptedWriter
-	RecvPad    *qpp.QuantumPermutationPad
-	RecvMacKey []byte
+	Conn    net.Conn
+	Channel *encryptedChannel
 }
 
 // runClient dials the server, completes the handshake, and attaches local TTY IO.
@@ -119,7 +117,7 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 
 	// Send initial terminal size
 	rows, cols := session.getWinsize()
-	_ = session.Writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
+	_ = session.Channel.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 
 	done := make(chan struct{})
 	var once sync.Once
@@ -225,10 +223,9 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, err
 	}
 
-	// Create encrypted writer and receiver
-	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMacKey)
-	recv := qpp.NewQPP(s2cSeed, pads)
-	return &clientSession{Conn: conn, Writer: writer, RecvPad: recv, RecvMacKey: s2cMacKey}, nil
+	// Create full-duplex encrypted channel
+	channel := newEncryptedChannel(conn, qpp.NewQPP(c2sSeed, pads), qpp.NewQPP(s2cSeed, pads), c2sMacKey, s2cMacKey)
+	return &clientSession{Conn: conn, Channel: channel}, nil
 }
 
 // forwardStdIn encrypts and forwards local keystrokes to the server.
@@ -238,7 +235,7 @@ func (s *clientSession) forwardStdIn() error {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
-			if sendErr := s.Writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
+			if sendErr := s.Channel.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
 				return sendErr
 			}
 		}
@@ -251,7 +248,7 @@ func (s *clientSession) forwardStdIn() error {
 // readServerOutput decrypts server payloads and writes them to stdout.
 func (s *clientSession) readServerOutput() error {
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
+		payload, err := s.Channel.Receive()
 		if err != nil {
 			return err
 		}
@@ -275,7 +272,7 @@ func (s *clientSession) handleClientResize(done <-chan struct{}) {
 			return
 		case <-sigCh:
 			rows, cols := s.getWinsize()
-			_ = s.Writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
+			_ = s.Channel.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 		}
 	}
 }

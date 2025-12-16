@@ -120,7 +120,7 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 		Size:      uint64(info.Size()),
 		Perm:      perm,
 	}
-	if err := s.Writer.Send(&protocol.PlainPayload{FileRequest: req}); err != nil {
+	if err := s.Channel.Send(&protocol.PlainPayload{FileRequest: req}); err != nil {
 		return err
 	}
 	ready, err := s.awaitFileResult()
@@ -142,7 +142,7 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 		if n > 0 {
 			chunk := &protocol.FileTransferChunk{Data: append([]byte(nil), buf[:n]...), Offset: offset}
 			offset += uint64(n)
-			if err := s.Writer.Send(&protocol.PlainPayload{FileChunk: chunk}); err != nil {
+			if err := s.Channel.Send(&protocol.PlainPayload{FileChunk: chunk}); err != nil {
 				return err
 			}
 		}
@@ -153,7 +153,7 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 			return readErr
 		}
 	}
-	if err := s.Writer.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
+	if err := s.Channel.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
 		return err
 	}
 	final, err := s.awaitFileResult()
@@ -174,7 +174,7 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 	if info, err := os.Stat(localPath); err == nil && info.IsDir() {
 		return fmt.Errorf("%s is a directory", localPath)
 	}
-	if err := s.Writer.Send(&protocol.PlainPayload{FileRequest: &protocol.FileTransferRequest{Direction: protocol.FileDirection_FILE_DIRECTION_DOWNLOAD, Path: remotePath}}); err != nil {
+	if err := s.Channel.Send(&protocol.PlainPayload{FileRequest: &protocol.FileTransferRequest{Direction: protocol.FileDirection_FILE_DIRECTION_DOWNLOAD, Path: remotePath}}); err != nil {
 		return err
 	}
 	start, err := s.awaitFileResult()
@@ -198,7 +198,7 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 	defer file.Close()
 	var offset uint64
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
+		payload, err := s.Channel.Receive()
 		if err != nil {
 			return err
 		}
@@ -240,7 +240,7 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 
 func (s *clientSession) awaitFileResult() (*protocol.FileTransferResult, error) {
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
+		payload, err := s.Channel.Receive()
 		if err != nil {
 			return nil, err
 		}
@@ -289,7 +289,7 @@ func parseRemoteTarget(arg string) (remoteTarget, bool, error) {
 
 // handleFileTransferSession orchestrates upload/download flows for copy mode clients.
 func (s *serverSession) handleFileTransferSession() error {
-	payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
+	payload, err := s.Channel.Receive()
 	if err != nil {
 		return err
 	}
@@ -330,7 +330,7 @@ func (s *serverSession) handleUploadTransfer(req *protocol.FileTransferRequest) 
 	}
 	var written uint64
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
+		payload, err := s.Channel.Receive()
 		if err != nil {
 			_ = s.sendCopyResult(false, err.Error(), written, true, uint32(perm))
 			return err
@@ -393,7 +393,7 @@ func (s *serverSession) handleDownloadTransfer(req *protocol.FileTransferRequest
 		if n > 0 {
 			chunk := &protocol.FileTransferChunk{Data: append([]byte(nil), buf[:n]...), Offset: offset}
 			offset += uint64(n)
-			if err := s.Writer.Send(&protocol.PlainPayload{FileChunk: chunk}); err != nil {
+			if err := s.Channel.Send(&protocol.PlainPayload{FileChunk: chunk}); err != nil {
 				return err
 			}
 		}
@@ -405,7 +405,7 @@ func (s *serverSession) handleDownloadTransfer(req *protocol.FileTransferRequest
 			return readErr
 		}
 	}
-	if err := s.Writer.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
+	if err := s.Channel.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
 		return err
 	}
 	return s.sendCopyResult(true, "download complete", offset, true, perm)
@@ -421,5 +421,5 @@ func sanitizeCopyPath(path string) (string, error) {
 
 func (s *serverSession) sendCopyResult(ok bool, message string, size uint64, done bool, perm uint32) error {
 	res := &protocol.FileTransferResult{Success: ok, Message: message, Size: size, Done: done, Perm: perm}
-	return s.Writer.Send(&protocol.PlainPayload{FileResult: res})
+	return s.Channel.Send(&protocol.PlainPayload{FileResult: res})
 }

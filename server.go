@@ -102,12 +102,10 @@ type clientRegistry map[string]*hppk.PublicKey
 
 // serverSession encapsulates per-client state derived during the handshake.
 type serverSession struct {
-	Conn       net.Conn
-	Writer     *encryptedWriter
-	RecvPad    *qpp.QuantumPermutationPad
-	RecvMacKey []byte
-	ClientID   string
-	Mode       protocol.ClientMode
+	Conn     net.Conn
+	Channel  *encryptedChannel
+	ClientID string
+	Mode     protocol.ClientMode
 }
 
 // loadClientRegistry loads each allowed client's public key once at startup.
@@ -301,10 +299,8 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 		return nil, err
 	}
 
-	// initialize encrypted writer and QPP receiver
-	session.Writer = newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount), s2cMac)
-	session.RecvPad = qpp.NewQPP(c2sSeed, padCount)
-	session.RecvMacKey = c2sMac
+	// initialize full-duplex encrypted channel
+	session.Channel = newEncryptedChannel(conn, qpp.NewQPP(s2cSeed, padCount), qpp.NewQPP(c2sSeed, padCount), s2cMac, c2sMac)
 
 	return session, nil
 }
@@ -342,7 +338,7 @@ func (s *serverSession) forwardPTYToClient(ptmx *os.File) error {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
-			if sendErr := s.Writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
+			if sendErr := s.Channel.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
 				return sendErr
 			}
 		}
@@ -358,7 +354,7 @@ func (s *serverSession) forwardPTYToClient(ptmx *os.File) error {
 // forwardClientToPTY feeds decrypted client data back into the PTY.
 func (s *serverSession) forwardClientToPTY(ptmx *os.File) error {
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
+		payload, err := s.Channel.Receive()
 		if err != nil {
 			return err
 		}

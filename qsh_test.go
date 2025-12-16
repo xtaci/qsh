@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/xtaci/hppk"
-	"github.com/xtaci/qpp"
 	"github.com/xtaci/qsh/protocol"
 )
 
@@ -82,15 +81,13 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	require.NotNil(t, srv.session)
 	require.Equal(t, clientID, srv.session.ClientID)
 	require.Equal(t, protocol.ClientMode_CLIENT_MODE_SHELL, srv.session.Mode)
-	require.NotNil(t, srv.session.Writer)
-	require.NotNil(t, srv.session.RecvPad)
-	require.NotNil(t, clientSession.Writer)
-	require.NotNil(t, clientSession.RecvPad)
+	require.NotNil(t, srv.session.Channel)
+	require.NotNil(t, clientSession.Channel)
 
 	const c2sMsg = "ping from client"
 	c2sErr := make(chan error, 1)
 	go func() {
-		payload, err := receivePayload(serverConn, srv.session.RecvPad, srv.session.RecvMacKey)
+		payload, err := srv.session.Channel.Receive()
 		if err != nil {
 			c2sErr <- err
 			return
@@ -101,13 +98,13 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 		}
 		c2sErr <- nil
 	}()
-	require.NoError(t, clientSession.Writer.Send(&protocol.PlainPayload{Stream: []byte(c2sMsg)}))
+	require.NoError(t, clientSession.Channel.Send(&protocol.PlainPayload{Stream: []byte(c2sMsg)}))
 	require.NoError(t, <-c2sErr)
 
 	const s2cMsg = "pong from server"
 	s2cErr := make(chan error, 1)
 	go func() {
-		payload, err := receivePayload(clientConn, clientSession.RecvPad, clientSession.RecvMacKey)
+		payload, err := clientSession.Channel.Receive()
 		if err != nil {
 			s2cErr <- err
 			return
@@ -118,7 +115,7 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 		}
 		s2cErr <- nil
 	}()
-	require.NoError(t, srv.session.Writer.Send(&protocol.PlainPayload{Stream: []byte(s2cMsg)}))
+	require.NoError(t, srv.session.Channel.Send(&protocol.PlainPayload{Stream: []byte(s2cMsg)}))
 	require.NoError(t, <-s2cErr)
 }
 
@@ -136,14 +133,14 @@ func TestFileUploadTransfer(t *testing.T) {
 	go func() {
 		errCh <- session.server.handleFileTransferSession()
 	}()
-	require.NoError(t, session.client.Writer.Send(&protocol.PlainPayload{FileRequest: req}))
-	ready := expectFileResult(t, session.client.Conn, session.client.RecvPad, session.client.RecvMacKey)
+	require.NoError(t, session.client.Channel.Send(&protocol.PlainPayload{FileRequest: req}))
+	ready := expectFileResult(t, session.client.Channel)
 	require.True(t, ready.Success)
 	require.False(t, ready.Done)
 	require.Equal(t, uint64(len(data)), ready.Size)
 	chunk := &protocol.FileTransferChunk{Data: data, Offset: 0, Eof: true}
-	require.NoError(t, session.client.Writer.Send(&protocol.PlainPayload{FileChunk: chunk}))
-	final := expectFileResult(t, session.client.Conn, session.client.RecvPad, session.client.RecvMacKey)
+	require.NoError(t, session.client.Channel.Send(&protocol.PlainPayload{FileChunk: chunk}))
+	final := expectFileResult(t, session.client.Channel)
 	require.True(t, final.Success)
 	require.True(t, final.Done)
 	require.NoError(t, <-errCh)
@@ -169,14 +166,14 @@ func TestFileDownloadTransfer(t *testing.T) {
 	go func() {
 		errCh <- session.server.handleFileTransferSession()
 	}()
-	require.NoError(t, session.client.Writer.Send(&protocol.PlainPayload{FileRequest: req}))
-	start := expectFileResult(t, session.client.Conn, session.client.RecvPad, session.client.RecvMacKey)
+	require.NoError(t, session.client.Channel.Send(&protocol.PlainPayload{FileRequest: req}))
+	start := expectFileResult(t, session.client.Channel)
 	require.True(t, start.Success)
 	require.False(t, start.Done)
 	require.Equal(t, uint64(len(content)), start.Size)
 	var received bytes.Buffer
 	for {
-		payload, err := receivePayload(session.client.Conn, session.client.RecvPad, session.client.RecvMacKey)
+		payload, err := session.client.Channel.Receive()
 		require.NoError(t, err)
 		if payload.FileChunk == nil {
 			t.Fatalf("expected file chunk, got %+v", payload)
@@ -189,7 +186,7 @@ func TestFileDownloadTransfer(t *testing.T) {
 			break
 		}
 	}
-	final := expectFileResult(t, session.client.Conn, session.client.RecvPad, session.client.RecvMacKey)
+	final := expectFileResult(t, session.client.Channel)
 	require.True(t, final.Success)
 	require.True(t, final.Done)
 	require.Equal(t, content, received.Bytes())
@@ -233,9 +230,9 @@ func setupCopySession(t *testing.T) copySession {
 	return copySession{server: srv.session, client: clientSession}
 }
 
-func expectFileResult(t *testing.T, conn net.Conn, pad *qpp.QuantumPermutationPad, mac []byte) *protocol.FileTransferResult {
+func expectFileResult(t *testing.T, ch *encryptedChannel) *protocol.FileTransferResult {
 	t.Helper()
-	payload, err := receivePayload(conn, pad, mac)
+	payload, err := ch.Receive()
 	require.NoError(t, err)
 	if payload.FileResult == nil {
 		t.Fatalf("expected file result, got %+v", payload)
