@@ -12,11 +12,14 @@ import (
 // QPP pad direction.
 const sessionKeyBytes = 256
 
+// hmacKeyBytes defines the length of the per-direction integrity key.
+const hmacKeyBytes = 32
+
 const (
 	encryptedKeyType = "encrypted-hppk"
 	exampleGenKey    = "qsh genkey -o ./id_hppk"
 	exampleServer    = "qsh server --clients-config /etc/qsh/clients.json"
-	exampleClient    = "qsh -i ./id_hppk -n client-1 127.0.0.1:2222"
+	exampleClient    = "qsh -i ./id_hppk -P 2222 client-1@127.0.0.1"
 	exampleCopy      = "qsh copy ./file client-1@203.0.113.10:/tmp/file"
 )
 
@@ -66,6 +69,7 @@ func clientCLIFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
 		&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
+		&cli.IntFlag{Name: "port", Aliases: []string{"P"}, Value: 2222, Usage: "remote port when not specified in the target"},
 	}
 }
 

@@ -90,21 +90,21 @@ func executeCopySession(addr string, priv *hppk.PrivateKey, clientID string, dir
 		return err
 	}
 	defer conn.Close()
-	writer, recv, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
+	writer, recv, recvMac, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
 	if err != nil {
 		return err
 	}
 	switch direction {
 	case protocol.FileDirection_FILE_DIRECTION_UPLOAD:
-		return clientUploadFile(conn, writer, recv, localPath, remotePath)
+		return clientUploadFile(conn, writer, recv, recvMac, localPath, remotePath)
 	case protocol.FileDirection_FILE_DIRECTION_DOWNLOAD:
-		return clientDownloadFile(conn, writer, recv, localPath, remotePath)
+		return clientDownloadFile(conn, writer, recv, recvMac, localPath, remotePath)
 	default:
 		return errors.New("unsupported copy direction")
 	}
 }
 
-func clientUploadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumPermutationPad, localPath, remotePath string) error {
+func clientUploadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumPermutationPad, recvMac []byte, localPath, remotePath string) error {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return err
@@ -122,7 +122,7 @@ func clientUploadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumP
 	if err := writer.Send(&protocol.PlainPayload{FileRequest: req}); err != nil {
 		return err
 	}
-	ready, err := awaitFileResult(conn, recv)
+	ready, err := awaitFileResult(conn, recv, recvMac)
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func clientUploadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumP
 	if err := writer.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
 		return err
 	}
-	final, err := awaitFileResult(conn, recv)
+	final, err := awaitFileResult(conn, recv, recvMac)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func clientUploadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumP
 	return nil
 }
 
-func clientDownloadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumPermutationPad, localPath, remotePath string) error {
+func clientDownloadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.QuantumPermutationPad, recvMac []byte, localPath, remotePath string) error {
 	if localPath == "" {
 		return errors.New("missing local destination path")
 	}
@@ -175,7 +175,7 @@ func clientDownloadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.Quantu
 	if err := writer.Send(&protocol.PlainPayload{FileRequest: &protocol.FileTransferRequest{Direction: protocol.FileDirection_FILE_DIRECTION_DOWNLOAD, Path: remotePath}}); err != nil {
 		return err
 	}
-	start, err := awaitFileResult(conn, recv)
+	start, err := awaitFileResult(conn, recv, recvMac)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func clientDownloadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.Quantu
 	defer file.Close()
 	var offset uint64
 	for {
-		payload, err := receivePayload(conn, recv)
+		payload, err := receivePayload(conn, recv, recvMac)
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func clientDownloadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.Quantu
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	final, err := awaitFileResult(conn, recv)
+	final, err := awaitFileResult(conn, recv, recvMac)
 	if err != nil {
 		return err
 	}
@@ -236,9 +236,9 @@ func clientDownloadFile(conn net.Conn, writer *encryptedWriter, recv *qpp.Quantu
 	return nil
 }
 
-func awaitFileResult(conn net.Conn, recv *qpp.QuantumPermutationPad) (*protocol.FileTransferResult, error) {
+func awaitFileResult(conn net.Conn, recv *qpp.QuantumPermutationPad, recvMac []byte) (*protocol.FileTransferResult, error) {
 	for {
-		payload, err := receivePayload(conn, recv)
+		payload, err := receivePayload(conn, recv, recvMac)
 		if err != nil {
 			return nil, err
 		}

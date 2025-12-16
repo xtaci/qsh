@@ -26,7 +26,35 @@ func runClientCommand(c *cli.Context) error {
 		} else {
 			_ = cli.ShowAppHelp(c)
 		}
-		return exitWithExample("client mode requires the remote address", exampleClient)
+		return exitWithExample("client mode requires the remote target", exampleClient)
+	}
+
+	target := strings.TrimSpace(c.Args().First())
+	if target == "" {
+		return exitWithExample("client mode requires the remote target", exampleClient)
+	}
+	clientID := strings.TrimSpace(c.String("id"))
+	hostPart := target
+	if at := strings.Index(target, "@"); at != -1 {
+		candidateID := strings.TrimSpace(target[:at])
+		hostPart = strings.TrimSpace(target[at+1:])
+		if candidateID != "" {
+			clientID = candidateID
+		}
+	}
+	if hostPart == "" {
+		return exitWithExample("client command requires a host", exampleClient)
+	}
+	if clientID == "" {
+		return exitWithExample("client command requires a client identifier", exampleClient)
+	}
+	addr := hostPart
+	if !strings.Contains(hostPart, ":") {
+		port := c.Int("port")
+		if port <= 0 {
+			port = 2222
+		}
+		addr = fmt.Sprintf("%s:%d", hostPart, port)
 	}
 
 	// Load client identity private key.
@@ -40,7 +68,7 @@ func runClientCommand(c *cli.Context) error {
 	}
 
 	// Run client connection with the private key
-	if err := runClient(c.Args().First(), priv, c.String("id")); err != nil {
+	if err := runClient(addr, priv, clientID); err != nil {
 		if isIdentityError(err) {
 			return fmt.Errorf("client connection failed (verify identity %s): %v", identity, err)
 		}
@@ -69,7 +97,7 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	defer conn.Close()
 
 	// Perform handshake
-	writer, recvQPP, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
+	writer, recvQPP, recvMac, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
 	if err != nil {
 		return err
 	}
@@ -94,7 +122,7 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	// Start IO forwarding
 	errCh := make(chan error, 2)
 	go func() { errCh <- forwardStdIn(writer) }()
-	go func() { errCh <- readServerOutput(conn, recvQPP) }()
+	go func() { errCh <- readServerOutput(conn, recvQPP, recvMac) }()
 
 	// Wait for any IO error
 	err = <-errCh
@@ -103,27 +131,27 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 }
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
-func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*encryptedWriter, *qpp.QuantumPermutationPad, error) {
+func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*encryptedWriter, *qpp.QuantumPermutationPad, []byte, error) {
 	// 1. Send ClientHello
 	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID, Mode: mode}}); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	env := &protocol.Envelope{}
 
 	// 2. Receive AuthChallenge
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	challenge := env.AuthChallenge
 	if challenge == nil {
-		return nil, nil, errors.New("handshake: expected challenge")
+		return nil, nil, nil, errors.New("handshake: expected challenge")
 	}
 
 	// 3. Decrypt KEM and derive master seed
 	kem := &hppk.KEM{P: new(big.Int).SetBytes(challenge.KemP), Q: new(big.Int).SetBytes(challenge.KemQ)}
 	secret, err := priv.Decrypt(kem)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	keySize := int(challenge.SessionKeySize)
 	if keySize <= 0 {
@@ -131,7 +159,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	}
 	secretBytes := secret.Bytes()
 	if len(secretBytes) > keySize {
-		return nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
+		return nil, nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
 	}
 
 	// As secret is a big.Int, it may be shorter than keySize bytes, so we left-pad with 0s
@@ -142,46 +170,54 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	// 4. Sign challenge and send AuthResponse
 	sig, err := priv.Sign(challenge.Challenge)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: signatureToProto(sig)}}
 	if err := protocol.WriteMessage(conn, response); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// 5. Receive AuthResult
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if env.AuthResult == nil || !env.AuthResult.Success {
 		msg := "authentication failed"
 		if env.AuthResult != nil && env.AuthResult.Message != "" {
 			msg = env.AuthResult.Message
 		}
-		return nil, nil, errors.New(msg)
+		return nil, nil, nil, errors.New(msg)
 	}
 
 	// 6. Prepare QPP pads for symmetric encryption
 	pads := uint16(challenge.Pads)
 	if !validatePadCount(pads) {
-		return nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, minPadCount, maxPadCount)
+		return nil, nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, minPadCount, maxPadCount)
 	}
 
 	// Derive directional seeds and create QPP instances
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	s2cSeed, err := deriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	c2sMac, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	s2cMac, err := deriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Create encrypted writer and receiver
-	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads))
+	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMac)
 	recv := qpp.NewQPP(s2cSeed, pads)
-	return writer, recv, nil
+	return writer, recv, s2cMac, nil
 }
 
 // forwardStdIn encrypts and forwards local keystrokes to the server.
@@ -202,9 +238,9 @@ func forwardStdIn(writer *encryptedWriter) error {
 }
 
 // readServerOutput decrypts server payloads and writes them to stdout.
-func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad) error {
+func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, recvMac []byte) error {
 	for {
-		payload, err := receivePayload(conn, recvQPP)
+		payload, err := receivePayload(conn, recvQPP, recvMac)
 		if err != nil {
 			return err
 		}

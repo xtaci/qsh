@@ -33,8 +33,10 @@ Quick Start
 3. Connect from the client (client mode is the default when no subcommand is provided):
 
 	```bash
-	qsh -i ./id_hppk -n client-1 203.0.113.10:2323
+	qsh -i ./id_hppk -P 2323 client-1@203.0.113.10
 	```
+
+	Omit `-P` to fall back to the default port `2222`, or provide `-n/--id` to override the client identifier when it is not embedded in the `client-id@host` target.
 
 Copying Files
 -------------

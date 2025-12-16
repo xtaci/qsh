@@ -152,23 +152,23 @@ func watchRegistryReload(store *clientRegistryStore, loader registryLoader) {
 // handleServerConn runs the handshake and launches the PTY bridge for a client.
 func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
 	defer conn.Close()
-	clientID, mode, writer, recvQPP, err := performServerHandshake(conn, store)
+	clientID, mode, writer, recvQPP, recvMac, err := performServerHandshake(conn, store)
 	if err != nil {
 		return err
 	}
 	log.Printf("client %s authenticated", clientID)
 	switch mode {
 	case protocol.ClientMode_CLIENT_MODE_COPY:
-		return handleFileTransferSession(conn, writer, recvQPP)
+		return handleFileTransferSession(conn, writer, recvQPP, recvMac)
 	default:
-		return handleInteractiveShell(conn, writer, recvQPP)
+		return handleInteractiveShell(conn, writer, recvQPP, recvMac)
 	}
 }
 
 // handleFileTransferSession currently acts as a placeholder so the tree builds while the
 // copy subcommand is under development.
-func handleFileTransferSession(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad) error {
-	payload, err := receivePayload(conn, recvQPP)
+func handleFileTransferSession(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad, recvMac []byte) error {
+	payload, err := receivePayload(conn, recvQPP, recvMac)
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func handleFileTransferSession(conn net.Conn, writer *encryptedWriter, recvQPP *
 	}
 	switch req.Direction {
 	case protocol.FileDirection_FILE_DIRECTION_UPLOAD:
-		return handleUploadTransfer(conn, writer, recvQPP, req)
+		return handleUploadTransfer(conn, writer, recvQPP, recvMac, req)
 	case protocol.FileDirection_FILE_DIRECTION_DOWNLOAD:
 		return handleDownloadTransfer(writer, req)
 	default:
@@ -188,7 +188,7 @@ func handleFileTransferSession(conn net.Conn, writer *encryptedWriter, recvQPP *
 	}
 }
 
-func handleUploadTransfer(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad, req *protocol.FileTransferRequest) error {
+func handleUploadTransfer(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad, recvMac []byte, req *protocol.FileTransferRequest) error {
 	path, err := sanitizeCopyPath(req.Path)
 	if err != nil {
 		_ = sendCopyResult(writer, false, err.Error(), 0, true, 0)
@@ -209,7 +209,7 @@ func handleUploadTransfer(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.Q
 	}
 	var written uint64
 	for {
-		payload, err := receivePayload(conn, recvQPP)
+		payload, err := receivePayload(conn, recvQPP, recvMac)
 		if err != nil {
 			_ = sendCopyResult(writer, false, err.Error(), written, true, uint32(perm))
 			return err
@@ -304,16 +304,16 @@ func sendCopyResult(writer *encryptedWriter, ok bool, message string, size uint6
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, protocol.ClientMode, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
+func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, protocol.ClientMode, *encryptedWriter, *qpp.QuantumPermutationPad, []byte, error) {
 	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	if env.ClientHello == nil {
 		_ = sendAuthResult(conn, false, "expected client hello")
-		return "", 0, nil, nil, errors.New("handshake: missing client hello")
+		return "", 0, nil, nil, nil, errors.New("handshake: missing client hello")
 	}
 
 	mode := env.ClientHello.Mode
@@ -326,23 +326,23 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	registry := store.Get()
 	if registry == nil {
 		_ = sendAuthResult(conn, false, "registry unavailable")
-		return "", 0, nil, nil, errors.New("handshake: registry unavailable")
+		return "", 0, nil, nil, nil, errors.New("handshake: registry unavailable")
 	}
 	pub, ok := registry[clientID]
 	if !ok {
 		_ = sendAuthResult(conn, false, "unknown client")
-		return "", 0, nil, nil, fmt.Errorf("unknown client %s", clientID)
+		return "", 0, nil, nil, nil, fmt.Errorf("unknown client %s", clientID)
 	}
 
 	// 3. Get random nonce as challenge
 	challenge := make([]byte, 48)
 	if _, err := rand.Read(challenge); err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	padCount, err := randomPrimePadCount()
 	if err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	// 4. Generate KEM for master secret(session key).
@@ -350,12 +350,12 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	// 	and the length of the key should be sent to the client.
 	masterSeed := make([]byte, sessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	kem, err := hppk.Encrypt(pub, masterSeed)
 	if err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	// 5. Send session key and challenge to client
@@ -368,55 +368,63 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	}}
 
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	// 5. Receive AuthResponse and decode signature
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	if env.AuthResponse == nil {
 		_ = sendAuthResult(conn, false, "expected auth response")
-		return "", 0, nil, nil, errors.New("handshake: missing auth response")
+		return "", 0, nil, nil, nil, errors.New("handshake: missing auth response")
 	}
 
 	if env.AuthResponse.ClientId != clientID {
 		_ = sendAuthResult(conn, false, "client id mismatch")
-		return "", 0, nil, nil, errors.New("handshake: client id mismatch")
+		return "", 0, nil, nil, nil, errors.New("handshake: client id mismatch")
 	}
 
 	sig, err := signatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
 		_ = sendAuthResult(conn, false, "invalid signature payload")
-		return "", 0, nil, nil, fmt.Errorf("decode signature: %w", err)
+		return "", 0, nil, nil, nil, fmt.Errorf("decode signature: %w", err)
 	}
 
 	// 6. Verify signature over challenge
 	if !hppk.VerifySignature(sig, challenge, pub) {
 		_ = sendAuthResult(conn, false, "signature verification failed")
-		return "", 0, nil, nil, errors.New("handshake: signature verification failed")
+		return "", 0, nil, nil, nil, errors.New("handshake: signature verification failed")
 	}
 	if err := sendAuthResult(conn, true, "authentication success"); err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 
 	// 7. Prepare QPP pads for symmetric encryption
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
 	}
 	s2cSeed, err := deriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
-		return "", 0, nil, nil, err
+		return "", 0, nil, nil, nil, err
+	}
+	c2sMac, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	if err != nil {
+		return "", 0, nil, nil, nil, err
+	}
+	s2cMac, err := deriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	if err != nil {
+		return "", 0, nil, nil, nil, err
 	}
 
 	// initialize encrypted writer and QPP receiver
-	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount))
+	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount), s2cMac)
 	recv := qpp.NewQPP(c2sSeed, padCount)
 
-	return clientID, mode, writer, recv, nil
+	return clientID, mode, writer, recv, c2sMac, nil
 }
 
 // sendAuthResult sends a simple AuthResult envelope to the peer.
@@ -427,8 +435,16 @@ func sendAuthResult(conn net.Conn, ok bool, message string) error {
 
 // deriveDirectionalSeed deterministically expands the shared master secret per direction.
 func deriveDirectionalSeed(master []byte, label string) ([]byte, error) {
+	return deriveKeyMaterial(master, label, sessionKeyBytes)
+}
+
+func deriveDirectionalMAC(master []byte, label string) ([]byte, error) {
+	return deriveKeyMaterial(master, label, hmacKeyBytes)
+}
+
+func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {
 	h := hkdf.New(sha256.New, master, nil, []byte(label))
-	out := make([]byte, sessionKeyBytes)
+	out := make([]byte, size)
 	if _, err := io.ReadFull(h, out); err != nil {
 		return nil, err
 	}
@@ -436,7 +452,7 @@ func deriveDirectionalSeed(master []byte, label string) ([]byte, error) {
 }
 
 // handleInteractiveShell bridges the remote PTY with the encrypted stream.
-func handleInteractiveShell(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad) error {
+func handleInteractiveShell(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad, recvMac []byte) error {
 	cmd := exec.Command("/bin/sh")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -446,7 +462,7 @@ func handleInteractiveShell(conn net.Conn, writer *encryptedWriter, recvQPP *qpp
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- forwardPTYToClient(ptmx, writer) }()
-	go func() { errCh <- forwardClientToPTY(conn, recvQPP, ptmx) }()
+	go func() { errCh <- forwardClientToPTY(conn, recvQPP, recvMac, ptmx) }()
 
 	err = <-errCh
 	conn.Close()
@@ -476,9 +492,9 @@ func forwardPTYToClient(ptmx *os.File, writer *encryptedWriter) error {
 }
 
 // forwardClientToPTY feeds decrypted client data back into the PTY.
-func forwardClientToPTY(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, ptmx *os.File) error {
+func forwardClientToPTY(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, recvMac []byte, ptmx *os.File) error {
 	for {
-		payload, err := receivePayload(conn, recvQPP)
+		payload, err := receivePayload(conn, recvQPP, recvMac)
 		if err != nil {
 			return err
 		}

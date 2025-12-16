@@ -55,6 +55,7 @@ message AuthResult {
 
 message SecureData {
   bytes ciphertext = 1;
+  bytes mac = 2;
 }
 
 message PlainPayload {

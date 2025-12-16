@@ -84,6 +84,7 @@ func (*AuthResult) ProtoMessage()    {}
 // SecureData contains encrypted payload bytes.
 type SecureData struct {
 	Ciphertext []byte `protobuf:"bytes,1,opt,name=ciphertext,proto3" json:"ciphertext,omitempty"`
+	Mac        []byte `protobuf:"bytes,2,opt,name=mac,proto3" json:"mac,omitempty"`
 }
 
 func (m *SecureData) Reset()         { *m = SecureData{} }

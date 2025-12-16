@@ -68,15 +68,16 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 		mode     protocol.ClientMode
 		writer   *encryptedWriter
 		recv     *qpp.QuantumPermutationPad
+		recvMac  []byte
 		err      error
 	}
 	srvCh := make(chan serverResult, 1)
 	go func() {
-		id, mode, writer, recv, err := performServerHandshake(serverConn, store)
-		srvCh <- serverResult{clientID: id, mode: mode, writer: writer, recv: recv, err: err}
+		id, mode, writer, recv, recvMac, err := performServerHandshake(serverConn, store)
+		srvCh <- serverResult{clientID: id, mode: mode, writer: writer, recv: recv, recvMac: recvMac, err: err}
 	}()
 
-	clientWriter, clientRecv, err := performClientHandshake(clientConn, client, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
+	clientWriter, clientRecv, clientMac, err := performClientHandshake(clientConn, client, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
 	require.NoError(t, err)
 
 	srv := <-srvCh
@@ -91,7 +92,7 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	const c2sMsg = "ping from client"
 	c2sErr := make(chan error, 1)
 	go func() {
-		payload, err := receivePayload(serverConn, srv.recv)
+		payload, err := receivePayload(serverConn, srv.recv, srv.recvMac)
 		if err != nil {
 			c2sErr <- err
 			return
@@ -108,7 +109,7 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	const s2cMsg = "pong from server"
 	s2cErr := make(chan error, 1)
 	go func() {
-		payload, err := receivePayload(clientConn, clientRecv)
+		payload, err := receivePayload(clientConn, clientRecv, clientMac)
 		if err != nil {
 			s2cErr <- err
 			return
@@ -135,16 +136,16 @@ func TestFileUploadTransfer(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleFileTransferSession(session.serverConn, session.serverWriter, session.serverRecv)
+		errCh <- handleFileTransferSession(session.serverConn, session.serverWriter, session.serverRecv, session.serverMac)
 	}()
 	require.NoError(t, session.clientWriter.Send(&protocol.PlainPayload{FileRequest: req}))
-	ready := expectFileResult(t, session.clientConn, session.clientRecv)
+	ready := expectFileResult(t, session.clientConn, session.clientRecv, session.clientMac)
 	require.True(t, ready.Success)
 	require.False(t, ready.Done)
 	require.Equal(t, uint64(len(data)), ready.Size)
 	chunk := &protocol.FileTransferChunk{Data: data, Offset: 0, Eof: true}
 	require.NoError(t, session.clientWriter.Send(&protocol.PlainPayload{FileChunk: chunk}))
-	final := expectFileResult(t, session.clientConn, session.clientRecv)
+	final := expectFileResult(t, session.clientConn, session.clientRecv, session.clientMac)
 	require.True(t, final.Success)
 	require.True(t, final.Done)
 	require.NoError(t, <-errCh)
@@ -168,16 +169,16 @@ func TestFileDownloadTransfer(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- handleFileTransferSession(session.serverConn, session.serverWriter, session.serverRecv)
+		errCh <- handleFileTransferSession(session.serverConn, session.serverWriter, session.serverRecv, session.serverMac)
 	}()
 	require.NoError(t, session.clientWriter.Send(&protocol.PlainPayload{FileRequest: req}))
-	start := expectFileResult(t, session.clientConn, session.clientRecv)
+	start := expectFileResult(t, session.clientConn, session.clientRecv, session.clientMac)
 	require.True(t, start.Success)
 	require.False(t, start.Done)
 	require.Equal(t, uint64(len(content)), start.Size)
 	var received bytes.Buffer
 	for {
-		payload, err := receivePayload(session.clientConn, session.clientRecv)
+		payload, err := receivePayload(session.clientConn, session.clientRecv, session.clientMac)
 		require.NoError(t, err)
 		if payload.FileChunk == nil {
 			t.Fatalf("expected file chunk, got %+v", payload)
@@ -190,7 +191,7 @@ func TestFileDownloadTransfer(t *testing.T) {
 			break
 		}
 	}
-	final := expectFileResult(t, session.clientConn, session.clientRecv)
+	final := expectFileResult(t, session.clientConn, session.clientRecv, session.clientMac)
 	require.True(t, final.Success)
 	require.True(t, final.Done)
 	require.Equal(t, content, received.Bytes())
@@ -204,6 +205,8 @@ type copySession struct {
 	serverRecv   *qpp.QuantumPermutationPad
 	clientWriter *encryptedWriter
 	clientRecv   *qpp.QuantumPermutationPad
+	serverMac    []byte
+	clientMac    []byte
 }
 
 func setupCopySession(t *testing.T) copySession {
@@ -223,14 +226,15 @@ func setupCopySession(t *testing.T) copySession {
 		mode     protocol.ClientMode
 		writer   *encryptedWriter
 		recv     *qpp.QuantumPermutationPad
+		recvMac  []byte
 		err      error
 	}
 	srvCh := make(chan srvRes, 1)
 	go func() {
-		id, mode, writer, recv, err := performServerHandshake(serverConn, store)
-		srvCh <- srvRes{clientID: id, mode: mode, writer: writer, recv: recv, err: err}
+		id, mode, writer, recv, recvMac, err := performServerHandshake(serverConn, store)
+		srvCh <- srvRes{clientID: id, mode: mode, writer: writer, recv: recv, recvMac: recvMac, err: err}
 	}()
-	clientWriter, clientRecv, err := performClientHandshake(clientConn, clientKey, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
+	clientWriter, clientRecv, clientMac, err := performClientHandshake(clientConn, clientKey, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
 	require.NoError(t, err)
 	srv := <-srvCh
 	require.NoError(t, srv.err)
@@ -243,12 +247,14 @@ func setupCopySession(t *testing.T) copySession {
 		serverRecv:   srv.recv,
 		clientWriter: clientWriter,
 		clientRecv:   clientRecv,
+		serverMac:    srv.recvMac,
+		clientMac:    clientMac,
 	}
 }
 
-func expectFileResult(t *testing.T, conn net.Conn, pad *qpp.QuantumPermutationPad) *protocol.FileTransferResult {
+func expectFileResult(t *testing.T, conn net.Conn, pad *qpp.QuantumPermutationPad, mac []byte) *protocol.FileTransferResult {
 	t.Helper()
-	payload, err := receivePayload(conn, pad)
+	payload, err := receivePayload(conn, pad, mac)
 	require.NoError(t, err)
 	if payload.FileResult == nil {
 		t.Fatalf("expected file result, got %+v", payload)

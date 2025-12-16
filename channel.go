@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"sync"
@@ -13,14 +15,15 @@ import (
 // encryptedWriter serializes plaintext payloads, encrypts them, and writes
 // framed envelopes on the shared connection.
 type encryptedWriter struct {
-	conn net.Conn
-	enc  *qpp.QuantumPermutationPad
-	mu   sync.Mutex
+	conn   net.Conn
+	enc    *qpp.QuantumPermutationPad
+	macKey []byte
+	mu     sync.Mutex
 }
 
 // newEncryptedWriter wraps a connection with the provided QPP encryptor.
-func newEncryptedWriter(conn net.Conn, enc *qpp.QuantumPermutationPad) *encryptedWriter {
-	return &encryptedWriter{conn: conn, enc: enc}
+func newEncryptedWriter(conn net.Conn, enc *qpp.QuantumPermutationPad, macKey []byte) *encryptedWriter {
+	return &encryptedWriter{conn: conn, enc: enc, macKey: append([]byte(nil), macKey...)}
 }
 
 // Send marshals a PlainPayload, encrypts the bytes, and writes a SecureData
@@ -34,7 +37,8 @@ func (w *encryptedWriter) Send(payload *protocol.PlainPayload) error {
 		return err
 	}
 	cipher := encryptBuffer(w.enc, plain)
-	env := &protocol.Envelope{SecureData: &protocol.SecureData{Ciphertext: cipher}}
+	mac := computePayloadHMAC(w.macKey, plain)
+	env := &protocol.Envelope{SecureData: &protocol.SecureData{Ciphertext: cipher, Mac: mac}}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return protocol.WriteMessage(w.conn, env)
@@ -42,7 +46,7 @@ func (w *encryptedWriter) Send(payload *protocol.PlainPayload) error {
 
 // receivePayload reads the next SecureData envelope, decrypts it, and returns
 // the contained PlainPayload.
-func receivePayload(conn net.Conn, dec *qpp.QuantumPermutationPad) (*protocol.PlainPayload, error) {
+func receivePayload(conn net.Conn, dec *qpp.QuantumPermutationPad, macKey []byte) (*protocol.PlainPayload, error) {
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return nil, err
@@ -51,6 +55,10 @@ func receivePayload(conn net.Conn, dec *qpp.QuantumPermutationPad) (*protocol.Pl
 		return nil, fmt.Errorf("unexpected non-secure message received")
 	}
 	plain := decryptBuffer(dec, env.SecureData.Ciphertext)
+	expected := computePayloadHMAC(macKey, plain)
+	if !hmac.Equal(expected, env.SecureData.Mac) {
+		return nil, fmt.Errorf("payload hmac mismatch")
+	}
 	payload := &protocol.PlainPayload{}
 	if err := proto.Unmarshal(plain, payload); err != nil {
 		return nil, err
@@ -71,4 +79,10 @@ func decryptBuffer(qp *qpp.QuantumPermutationPad, data []byte) []byte {
 	buf := append([]byte(nil), data...)
 	qp.Decrypt(buf)
 	return buf
+}
+
+func computePayloadHMAC(key, data []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return h.Sum(nil)
 }
