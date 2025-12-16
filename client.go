@@ -88,6 +88,13 @@ func isIdentityError(err error) bool {
 		strings.Contains(msg, "decrypt")
 }
 
+// ClientSession bundles the encryption primitives established during the client handshake.
+type ClientSession struct {
+	Writer  *encryptedWriter
+	RecvPad *qpp.QuantumPermutationPad
+	RecvMac []byte
+}
+
 // runClient dials the server, completes the handshake, and attaches local TTY IO.
 func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	// Connect to server
@@ -98,10 +105,13 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	defer conn.Close()
 
 	// Perform handshake
-	writer, recvQPP, recvMac, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
+	session, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
 	if err != nil {
 		return err
 	}
+	writer := session.Writer
+	recvQPP := session.RecvPad
+	recvMac := session.RecvMac
 
 	// Set terminal to raw mode
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
@@ -132,27 +142,27 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 }
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
-func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*encryptedWriter, *qpp.QuantumPermutationPad, []byte, error) {
+func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*ClientSession, error) {
 	// 1. Send ClientHello
 	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID, Mode: mode}}); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	env := &protocol.Envelope{}
 
 	// 2. Receive AuthChallenge
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	challenge := env.AuthChallenge
 	if challenge == nil {
-		return nil, nil, nil, errors.New("handshake: expected challenge")
+		return nil, errors.New("handshake: expected challenge")
 	}
 
 	// 3. Decrypt KEM and derive master seed
 	kem := &hppk.KEM{P: new(big.Int).SetBytes(challenge.KemP), Q: new(big.Int).SetBytes(challenge.KemQ)}
 	secret, err := priv.Decrypt(kem)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	keySize := int(challenge.SessionKeySize)
 	if keySize <= 0 {
@@ -160,7 +170,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	}
 	secretBytes := secret.Bytes()
 	if len(secretBytes) > keySize {
-		return nil, nil, nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
+		return nil, fmt.Errorf("handshake: decrypted secret is %d bytes but expected <= %d (wrong key?)", len(secretBytes), keySize)
 	}
 
 	// As secret is a big.Int, it may be shorter than keySize bytes, so we left-pad with 0s
@@ -171,56 +181,56 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	// 4. Sign challenge and send AuthResponse
 	sig, err := priv.Sign(challenge.Challenge)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: qcrypto.SignatureToProto(sig)}}
 	if err := protocol.WriteMessage(conn, response); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// 5. Receive AuthResult
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if env.AuthResult == nil || !env.AuthResult.Success {
 		msg := "authentication failed"
 		if env.AuthResult != nil && env.AuthResult.Message != "" {
 			msg = env.AuthResult.Message
 		}
-		return nil, nil, nil, errors.New(msg)
+		return nil, errors.New(msg)
 	}
 
 	// 6. Prepare QPP pads for symmetric encryption
 	pads := uint16(challenge.Pads)
 	if !qcrypto.ValidatePadCount(pads) {
-		return nil, nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, qcrypto.MinPadCount, qcrypto.MaxPadCount)
+		return nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, qcrypto.MinPadCount, qcrypto.MaxPadCount)
 	}
 
 	// Derive directional seeds and create QPP instances
 	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// Derive directional MAC keys
 	c2sMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	s2cMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// Create encrypted writer and receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMacKey)
 	recv := qpp.NewQPP(s2cSeed, pads)
-	return writer, recv, s2cMacKey, nil
+	return &ClientSession{Writer: writer, RecvPad: recv, RecvMac: s2cMacKey}, nil
 }
 
 // forwardStdIn encrypts and forwards local keystrokes to the server.

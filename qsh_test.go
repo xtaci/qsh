@@ -77,8 +77,9 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 		srvCh <- serverResult{clientID: id, mode: mode, writer: writer, recv: recv, recvMac: recvMac, err: err}
 	}()
 
-	clientWriter, clientRecv, clientMac, err := performClientHandshake(clientConn, client, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
+	clientSession, err := performClientHandshake(clientConn, client, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
 	require.NoError(t, err)
+	require.NotNil(t, clientSession)
 
 	srv := <-srvCh
 	require.NoError(t, srv.err)
@@ -86,8 +87,8 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	require.Equal(t, protocol.ClientMode_CLIENT_MODE_SHELL, srv.mode)
 	require.NotNil(t, srv.writer)
 	require.NotNil(t, srv.recv)
-	require.NotNil(t, clientWriter)
-	require.NotNil(t, clientRecv)
+	require.NotNil(t, clientSession.Writer)
+	require.NotNil(t, clientSession.RecvPad)
 
 	const c2sMsg = "ping from client"
 	c2sErr := make(chan error, 1)
@@ -103,13 +104,13 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 		}
 		c2sErr <- nil
 	}()
-	require.NoError(t, clientWriter.Send(&protocol.PlainPayload{Stream: []byte(c2sMsg)}))
+	require.NoError(t, clientSession.Writer.Send(&protocol.PlainPayload{Stream: []byte(c2sMsg)}))
 	require.NoError(t, <-c2sErr)
 
 	const s2cMsg = "pong from server"
 	s2cErr := make(chan error, 1)
 	go func() {
-		payload, err := receivePayload(clientConn, clientRecv, clientMac)
+		payload, err := receivePayload(clientConn, clientSession.RecvPad, clientSession.RecvMac)
 		if err != nil {
 			s2cErr <- err
 			return
@@ -234,8 +235,9 @@ func setupCopySession(t *testing.T) copySession {
 		id, mode, writer, recv, recvMac, err := performServerHandshake(serverConn, store)
 		srvCh <- srvRes{clientID: id, mode: mode, writer: writer, recv: recv, recvMac: recvMac, err: err}
 	}()
-	clientWriter, clientRecv, clientMac, err := performClientHandshake(clientConn, clientKey, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
+	clientSession, err := performClientHandshake(clientConn, clientKey, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
 	require.NoError(t, err)
+	require.NotNil(t, clientSession)
 	srv := <-srvCh
 	require.NoError(t, srv.err)
 	require.Equal(t, clientID, srv.clientID)
@@ -245,10 +247,10 @@ func setupCopySession(t *testing.T) copySession {
 		clientConn:   clientConn,
 		serverWriter: srv.writer,
 		serverRecv:   srv.recv,
-		clientWriter: clientWriter,
-		clientRecv:   clientRecv,
+		clientWriter: clientSession.Writer,
+		clientRecv:   clientSession.RecvPad,
 		serverMac:    srv.recvMac,
-		clientMac:    clientMac,
+		clientMac:    clientSession.RecvMac,
 	}
 }
 

@@ -91,15 +91,15 @@ func executeCopySession(addr string, priv *hppk.PrivateKey, clientID string, dir
 		return err
 	}
 	defer conn.Close()
-	writer, recv, recvMac, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
+	session, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
 	if err != nil {
 		return err
 	}
 	switch direction {
 	case protocol.FileDirection_FILE_DIRECTION_UPLOAD:
-		return clientUploadFile(conn, writer, recv, recvMac, localPath, remotePath)
+		return clientUploadFile(conn, session.Writer, session.RecvPad, session.RecvMac, localPath, remotePath)
 	case protocol.FileDirection_FILE_DIRECTION_DOWNLOAD:
-		return clientDownloadFile(conn, writer, recv, recvMac, localPath, remotePath)
+		return clientDownloadFile(conn, session.Writer, session.RecvPad, session.RecvMac, localPath, remotePath)
 	default:
 		return errors.New("unsupported copy direction")
 	}
