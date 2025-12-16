@@ -100,6 +100,16 @@ func runServerCommand(c *cli.Context) error {
 // clientRegistry maps client IDs onto their trusted public keys.
 type clientRegistry map[string]*hppk.PublicKey
 
+// ServerSession encapsulates per-client state derived during the handshake.
+type ServerSession struct {
+	Conn     net.Conn
+	Writer   *encryptedWriter
+	RecvPad  *qpp.QuantumPermutationPad
+	RecvMac  []byte
+	ClientID string
+	Mode     protocol.ClientMode
+}
+
 // loadClientRegistry loads each allowed client's public key once at startup.
 func loadClientRegistry(entries []clientEntry) (clientRegistry, error) {
 	reg := make(clientRegistry)
@@ -158,59 +168,62 @@ func watchRegistryReload(store *clientRegistryStore, loader registryLoader) {
 // handleServerConn runs the handshake and launches the PTY bridge for a client.
 func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
 	defer conn.Close()
-	clientID, mode, writer, recvQPP, recvMac, err := performServerHandshake(conn, store)
+	session, err := performServerHandshake(conn, store)
 	if err != nil {
 		return err
 	}
-	log.Printf("client %s authenticated", clientID)
-	switch mode {
+	log.Printf("client %s authenticated", session.ClientID)
+	switch session.Mode {
 	case protocol.ClientMode_CLIENT_MODE_COPY:
-		return handleFileTransferSession(conn, writer, recvQPP, recvMac)
+		return session.handleFileTransferSession()
 	default:
-		return handleInteractiveShell(conn, writer, recvQPP, recvMac)
+		return session.handleInteractiveShell()
 	}
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, protocol.ClientMode, *encryptedWriter, *qpp.QuantumPermutationPad, []byte, error) {
+func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*ServerSession, error) {
+	session := &ServerSession{Conn: conn}
 	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	if env.ClientHello == nil {
-		_ = sendAuthResult(conn, false, "expected client hello")
-		return "", 0, nil, nil, nil, errors.New("handshake: missing client hello")
+		_ = session.sendAuthResult(false, "expected client hello")
+		return nil, errors.New("handshake: missing client hello")
 	}
 
 	mode := env.ClientHello.Mode
 	if mode != protocol.ClientMode_CLIENT_MODE_COPY {
 		mode = protocol.ClientMode_CLIENT_MODE_SHELL
 	}
+	session.Mode = mode
 
 	// 2. Lookup client public key
 	clientID := env.ClientHello.ClientId
+	session.ClientID = clientID
 	registry := store.Get()
 	if registry == nil {
-		_ = sendAuthResult(conn, false, "registry unavailable")
-		return "", 0, nil, nil, nil, errors.New("handshake: registry unavailable")
+		_ = session.sendAuthResult(false, "registry unavailable")
+		return nil, errors.New("handshake: registry unavailable")
 	}
 	pub, ok := registry[clientID]
 	if !ok {
-		_ = sendAuthResult(conn, false, "unknown client")
-		return "", 0, nil, nil, nil, fmt.Errorf("unknown client %s", clientID)
+		_ = session.sendAuthResult(false, "unknown client")
+		return nil, fmt.Errorf("unknown client %s", clientID)
 	}
 
 	// 3. Get random nonce as challenge
 	challenge := make([]byte, 48)
 	if _, err := rand.Read(challenge); err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	padCount, err := qcrypto.RandomPrimePadCount()
 	if err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	// 4. Generate KEM for master secret(session key).
@@ -218,12 +231,12 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	// 	and the length of the key should be sent to the client.
 	masterSeed := make([]byte, qcrypto.SessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	kem, err := hppk.Encrypt(pub, masterSeed)
 	if err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	// 5. Send session key and challenge to client
@@ -236,73 +249,74 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	}}
 
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	// 5. Receive AuthResponse and decode signature
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	if env.AuthResponse == nil {
-		_ = sendAuthResult(conn, false, "expected auth response")
-		return "", 0, nil, nil, nil, errors.New("handshake: missing auth response")
+		_ = session.sendAuthResult(false, "expected auth response")
+		return nil, errors.New("handshake: missing auth response")
 	}
 
 	if env.AuthResponse.ClientId != clientID {
-		_ = sendAuthResult(conn, false, "client id mismatch")
-		return "", 0, nil, nil, nil, errors.New("handshake: client id mismatch")
+		_ = session.sendAuthResult(false, "client id mismatch")
+		return nil, errors.New("handshake: client id mismatch")
 	}
 
 	sig, err := qcrypto.SignatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
-		_ = sendAuthResult(conn, false, "invalid signature payload")
-		return "", 0, nil, nil, nil, fmt.Errorf("decode signature: %w", err)
+		_ = session.sendAuthResult(false, "invalid signature payload")
+		return nil, fmt.Errorf("decode signature: %w", err)
 	}
 
 	// 6. Verify signature over challenge
 	if !hppk.VerifySignature(sig, challenge, pub) {
-		_ = sendAuthResult(conn, false, "signature verification failed")
-		return "", 0, nil, nil, nil, errors.New("handshake: signature verification failed")
+		_ = session.sendAuthResult(false, "signature verification failed")
+		return nil, errors.New("handshake: signature verification failed")
 	}
-	if err := sendAuthResult(conn, true, "authentication success"); err != nil {
-		return "", 0, nil, nil, nil, err
+	if err := session.sendAuthResult(true, "authentication success"); err != nil {
+		return nil, err
 	}
 
 	// 7. Prepare QPP pads for symmetric encryption
 	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 	c2sMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
 	if err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 	s2cMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
 	if err != nil {
-		return "", 0, nil, nil, nil, err
+		return nil, err
 	}
 
 	// initialize encrypted writer and QPP receiver
-	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount), s2cMac)
-	recv := qpp.NewQPP(c2sSeed, padCount)
+	session.Writer = newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount), s2cMac)
+	session.RecvPad = qpp.NewQPP(c2sSeed, padCount)
+	session.RecvMac = c2sMac
 
-	return clientID, mode, writer, recv, c2sMac, nil
+	return session, nil
 }
 
 // sendAuthResult sends a simple AuthResult envelope to the peer.
-func sendAuthResult(conn net.Conn, ok bool, message string) error {
+func (s *ServerSession) sendAuthResult(ok bool, message string) error {
 	env := &protocol.Envelope{AuthResult: &protocol.AuthResult{Success: ok, Message: message}}
-	return protocol.WriteMessage(conn, env)
+	return protocol.WriteMessage(s.Conn, env)
 }
 
 // handleInteractiveShell bridges the remote PTY with the encrypted stream.
-func handleInteractiveShell(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad, recvMac []byte) error {
+func (s *ServerSession) handleInteractiveShell() error {
 	cmd := exec.Command("/bin/sh")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -311,24 +325,24 @@ func handleInteractiveShell(conn net.Conn, writer *encryptedWriter, recvQPP *qpp
 	defer ptmx.Close()
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- forwardPTYToClient(ptmx, writer) }()
-	go func() { errCh <- forwardClientToPTY(conn, recvQPP, recvMac, ptmx) }()
+	go func() { errCh <- s.forwardPTYToClient(ptmx) }()
+	go func() { errCh <- s.forwardClientToPTY(ptmx) }()
 
 	err = <-errCh
-	conn.Close()
+	s.Conn.Close()
 	cmd.Process.Kill()
 	cmd.Wait()
 	return err
 }
 
 // forwardPTYToClient streams PTY output toward the client.
-func forwardPTYToClient(ptmx *os.File, writer *encryptedWriter) error {
+func (s *ServerSession) forwardPTYToClient(ptmx *os.File) error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
-			if sendErr := writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
+			if sendErr := s.Writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
 				return sendErr
 			}
 		}
@@ -342,9 +356,9 @@ func forwardPTYToClient(ptmx *os.File, writer *encryptedWriter) error {
 }
 
 // forwardClientToPTY feeds decrypted client data back into the PTY.
-func forwardClientToPTY(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, recvMac []byte, ptmx *os.File) error {
+func (s *ServerSession) forwardClientToPTY(ptmx *os.File) error {
 	for {
-		payload, err := receivePayload(conn, recvQPP, recvMac)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
 		if err != nil {
 			return err
 		}
@@ -354,13 +368,13 @@ func forwardClientToPTY(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, recvM
 			}
 		}
 		if payload.Resize != nil {
-			applyResize(ptmx, payload.Resize)
+			s.applyResize(ptmx, payload.Resize)
 		}
 	}
 }
 
 // applyResize resizes the PTY; errors are ignored because resize is best-effort.
-func applyResize(ptmx *os.File, resize *protocol.Resize) {
+func (s *ServerSession) applyResize(ptmx *os.File, resize *protocol.Resize) {
 	rows := uint16(resize.Rows)
 	cols := uint16(resize.Cols)
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})

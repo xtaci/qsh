@@ -90,6 +90,7 @@ func isIdentityError(err error) bool {
 
 // ClientSession bundles the encryption primitives established during the client handshake.
 type ClientSession struct {
+	Conn    net.Conn
 	Writer  *encryptedWriter
 	RecvPad *qpp.QuantumPermutationPad
 	RecvMac []byte
@@ -109,9 +110,6 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	if err != nil {
 		return err
 	}
-	writer := session.Writer
-	recvQPP := session.RecvPad
-	recvMac := session.RecvMac
 
 	// Set terminal to raw mode
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
@@ -120,20 +118,20 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	}
 
 	// Send initial terminal size
-	rows, cols := getWinsize()
-	_ = writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
+	rows, cols := session.getWinsize()
+	_ = session.Writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 
 	done := make(chan struct{})
 	var once sync.Once
 	stop := func() { once.Do(func() { close(done) }) }
 
 	// Start terminal resize handler goroutine
-	go handleClientResize(writer, done)
+	go session.handleClientResize(done)
 
 	// Start IO forwarding
 	errCh := make(chan error, 2)
-	go func() { errCh <- forwardStdIn(writer) }()
-	go func() { errCh <- readServerOutput(conn, recvQPP, recvMac) }()
+	go func() { errCh <- session.forwardStdIn() }()
+	go func() { errCh <- session.readServerOutput() }()
 
 	// Wait for any IO error
 	err = <-errCh
@@ -230,17 +228,17 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	// Create encrypted writer and receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMacKey)
 	recv := qpp.NewQPP(s2cSeed, pads)
-	return &ClientSession{Writer: writer, RecvPad: recv, RecvMac: s2cMacKey}, nil
+	return &ClientSession{Conn: conn, Writer: writer, RecvPad: recv, RecvMac: s2cMacKey}, nil
 }
 
 // forwardStdIn encrypts and forwards local keystrokes to the server.
-func forwardStdIn(writer *encryptedWriter) error {
+func (s *ClientSession) forwardStdIn() error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
-			if sendErr := writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
+			if sendErr := s.Writer.Send(&protocol.PlainPayload{Stream: chunk}); sendErr != nil {
 				return sendErr
 			}
 		}
@@ -251,9 +249,9 @@ func forwardStdIn(writer *encryptedWriter) error {
 }
 
 // readServerOutput decrypts server payloads and writes them to stdout.
-func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, s2cMacKey []byte) error {
+func (s *ClientSession) readServerOutput() error {
 	for {
-		payload, err := receivePayload(conn, recvQPP, s2cMacKey)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
 		if err != nil {
 			return err
 		}
@@ -266,7 +264,7 @@ func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, s2cMacK
 }
 
 // handleClientResize pushes terminal size updates to the remote PTY.
-func handleClientResize(writer *encryptedWriter, done <-chan struct{}) {
+func (s *ClientSession) handleClientResize(done <-chan struct{}) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGWINCH)
 	defer signal.Stop(sigCh)
@@ -276,14 +274,14 @@ func handleClientResize(writer *encryptedWriter, done <-chan struct{}) {
 		case <-done:
 			return
 		case <-sigCh:
-			rows, cols := getWinsize()
-			_ = writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
+			rows, cols := s.getWinsize()
+			_ = s.Writer.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 		}
 	}
 }
 
 // getWinsize returns the caller TTY dimensions, falling back to 80x24.
-func getWinsize() (rows, cols uint16) {
+func (s *ClientSession) getWinsize() (rows, cols uint16) {
 	w, h, err := term.GetSize(int(os.Stdin.Fd()))
 	if err != nil {
 		return 24, 80
