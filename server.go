@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -151,25 +152,173 @@ func watchRegistryReload(store *clientRegistryStore, loader registryLoader) {
 // handleServerConn runs the handshake and launches the PTY bridge for a client.
 func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
 	defer conn.Close()
-	clientID, writer, recvQPP, err := performServerHandshake(conn, store)
+	clientID, mode, writer, recvQPP, err := performServerHandshake(conn, store)
 	if err != nil {
 		return err
 	}
 	log.Printf("client %s authenticated", clientID)
-	return handleInteractiveShell(conn, writer, recvQPP)
+	switch mode {
+	case protocol.ClientMode_CLIENT_MODE_COPY:
+		return handleFileTransferSession(conn, writer, recvQPP)
+	default:
+		return handleInteractiveShell(conn, writer, recvQPP)
+	}
+}
+
+// handleFileTransferSession currently acts as a placeholder so the tree builds while the
+// copy subcommand is under development.
+func handleFileTransferSession(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad) error {
+	payload, err := receivePayload(conn, recvQPP)
+	if err != nil {
+		return err
+	}
+	req := payload.FileRequest
+	if req == nil {
+		_ = sendCopyResult(writer, false, "expected file transfer request", 0, true, 0)
+		return errors.New("copy: missing file transfer request")
+	}
+	switch req.Direction {
+	case protocol.FileDirection_FILE_DIRECTION_UPLOAD:
+		return handleUploadTransfer(conn, writer, recvQPP, req)
+	case protocol.FileDirection_FILE_DIRECTION_DOWNLOAD:
+		return handleDownloadTransfer(writer, req)
+	default:
+		_ = sendCopyResult(writer, false, fmt.Sprintf("unsupported direction %v", req.Direction), 0, true, 0)
+		return fmt.Errorf("copy: unsupported direction %v", req.Direction)
+	}
+}
+
+func handleUploadTransfer(conn net.Conn, writer *encryptedWriter, recvQPP *qpp.QuantumPermutationPad, req *protocol.FileTransferRequest) error {
+	path, err := sanitizeCopyPath(req.Path)
+	if err != nil {
+		_ = sendCopyResult(writer, false, err.Error(), 0, true, 0)
+		return err
+	}
+	perm := os.FileMode(req.Perm)
+	if perm == 0 {
+		perm = 0o600
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		_ = sendCopyResult(writer, false, err.Error(), 0, true, uint32(perm))
+		return err
+	}
+	defer file.Close()
+	if err := sendCopyResult(writer, true, "ready", req.Size, false, uint32(perm)); err != nil {
+		return err
+	}
+	var written uint64
+	for {
+		payload, err := receivePayload(conn, recvQPP)
+		if err != nil {
+			_ = sendCopyResult(writer, false, err.Error(), written, true, uint32(perm))
+			return err
+		}
+		chunk := payload.FileChunk
+		if chunk == nil {
+			msg := "missing file chunk"
+			_ = sendCopyResult(writer, false, msg, written, true, uint32(perm))
+			return errors.New("copy: missing file chunk")
+		}
+		if chunk.Offset != written {
+			msg := fmt.Sprintf("unexpected chunk offset %d (expected %d)", chunk.Offset, written)
+			_ = sendCopyResult(writer, false, msg, written, true, uint32(perm))
+			return errors.New(msg)
+		}
+		if len(chunk.Data) > 0 {
+			if _, err := file.Write(chunk.Data); err != nil {
+				_ = sendCopyResult(writer, false, err.Error(), written, true, uint32(perm))
+				return err
+			}
+			written += uint64(len(chunk.Data))
+		}
+		if chunk.Eof {
+			break
+		}
+	}
+	if err := file.Sync(); err != nil {
+		_ = sendCopyResult(writer, false, err.Error(), written, true, uint32(perm))
+		return err
+	}
+	return sendCopyResult(writer, true, "upload complete", written, true, uint32(perm))
+}
+
+func handleDownloadTransfer(writer *encryptedWriter, req *protocol.FileTransferRequest) error {
+	path, err := sanitizeCopyPath(req.Path)
+	if err != nil {
+		_ = sendCopyResult(writer, false, err.Error(), 0, true, 0)
+		return err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		_ = sendCopyResult(writer, false, err.Error(), 0, true, 0)
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		_ = sendCopyResult(writer, false, err.Error(), 0, true, 0)
+		return err
+	}
+	size := uint64(info.Size())
+	perm := uint32(info.Mode().Perm())
+	if err := sendCopyResult(writer, true, "starting download", size, false, perm); err != nil {
+		return err
+	}
+	buf := make([]byte, 32*1024)
+	var offset uint64
+	for {
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			chunk := &protocol.FileTransferChunk{Data: append([]byte(nil), buf[:n]...), Offset: offset}
+			offset += uint64(n)
+			if err := writer.Send(&protocol.PlainPayload{FileChunk: chunk}); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			_ = sendCopyResult(writer, false, readErr.Error(), offset, true, perm)
+			return readErr
+		}
+	}
+	if err := writer.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
+		return err
+	}
+	return sendCopyResult(writer, true, "download complete", offset, true, perm)
+}
+
+func sanitizeCopyPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("empty path")
+	}
+	return filepath.Clean(trimmed), nil
+}
+
+func sendCopyResult(writer *encryptedWriter, ok bool, message string, size uint64, done bool, perm uint32) error {
+	res := &protocol.FileTransferResult{Success: ok, Message: message, Size: size, Done: done, Perm: perm}
+	return writer.Send(&protocol.PlainPayload{FileResult: res})
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
+func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, protocol.ClientMode, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
 	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	if env.ClientHello == nil {
 		_ = sendAuthResult(conn, false, "expected client hello")
-		return "", nil, nil, errors.New("handshake: missing client hello")
+		return "", 0, nil, nil, errors.New("handshake: missing client hello")
+	}
+
+	mode := env.ClientHello.Mode
+	if mode != protocol.ClientMode_CLIENT_MODE_COPY {
+		mode = protocol.ClientMode_CLIENT_MODE_SHELL
 	}
 
 	// 2. Lookup client public key
@@ -177,23 +326,23 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	registry := store.Get()
 	if registry == nil {
 		_ = sendAuthResult(conn, false, "registry unavailable")
-		return "", nil, nil, errors.New("handshake: registry unavailable")
+		return "", 0, nil, nil, errors.New("handshake: registry unavailable")
 	}
 	pub, ok := registry[clientID]
 	if !ok {
 		_ = sendAuthResult(conn, false, "unknown client")
-		return "", nil, nil, fmt.Errorf("unknown client %s", clientID)
+		return "", 0, nil, nil, fmt.Errorf("unknown client %s", clientID)
 	}
 
 	// 3. Get random nonce as challenge
 	challenge := make([]byte, 48)
 	if _, err := rand.Read(challenge); err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	padCount, err := randomPrimePadCount()
 	if err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	// 4. Generate KEM for master secret(session key).
@@ -201,12 +350,12 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	// 	and the length of the key should be sent to the client.
 	masterSeed := make([]byte, sessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	kem, err := hppk.Encrypt(pub, masterSeed)
 	if err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	// 5. Send session key and challenge to client
@@ -219,55 +368,55 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	}}
 
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	// 5. Receive AuthResponse and decode signature
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	if env.AuthResponse == nil {
 		_ = sendAuthResult(conn, false, "expected auth response")
-		return "", nil, nil, errors.New("handshake: missing auth response")
+		return "", 0, nil, nil, errors.New("handshake: missing auth response")
 	}
 
 	if env.AuthResponse.ClientId != clientID {
 		_ = sendAuthResult(conn, false, "client id mismatch")
-		return "", nil, nil, errors.New("handshake: client id mismatch")
+		return "", 0, nil, nil, errors.New("handshake: client id mismatch")
 	}
 
 	sig, err := signatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
 		_ = sendAuthResult(conn, false, "invalid signature payload")
-		return "", nil, nil, fmt.Errorf("decode signature: %w", err)
+		return "", 0, nil, nil, fmt.Errorf("decode signature: %w", err)
 	}
 
 	// 6. Verify signature over challenge
 	if !hppk.VerifySignature(sig, challenge, pub) {
 		_ = sendAuthResult(conn, false, "signature verification failed")
-		return "", nil, nil, errors.New("handshake: signature verification failed")
+		return "", 0, nil, nil, errors.New("handshake: signature verification failed")
 	}
 	if err := sendAuthResult(conn, true, "authentication success"); err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	// 7. Prepare QPP pads for symmetric encryption
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 	s2cSeed, err := deriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
-		return "", nil, nil, err
+		return "", 0, nil, nil, err
 	}
 
 	// initialize encrypted writer and QPP receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount))
 	recv := qpp.NewQPP(c2sSeed, padCount)
 
-	return clientID, writer, recv, nil
+	return clientID, mode, writer, recv, nil
 }
 
 // sendAuthResult sends a simple AuthResult envelope to the peer.

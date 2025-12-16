@@ -16,6 +16,12 @@ message Envelope {
 
 message ClientHello {
   string client_id = 1;
+  ClientMode mode = 2;
+}
+
+enum ClientMode {
+  CLIENT_MODE_SHELL = 0;
+  CLIENT_MODE_COPY = 1;
 }
 
 message AuthChallenge {
@@ -55,10 +61,39 @@ message PlainPayload {
   oneof payload {
     bytes stream = 1;
     Resize resize = 2;
+    FileTransferRequest file_request = 3;
+    FileTransferChunk file_chunk = 4;
+    FileTransferResult file_result = 5;
   }
 }
 
 message Resize {
   uint32 rows = 1;
   uint32 cols = 2;
+}
+
+enum FileDirection {
+  FILE_DIRECTION_UPLOAD = 0;
+  FILE_DIRECTION_DOWNLOAD = 1;
+}
+
+message FileTransferRequest {
+  FileDirection direction = 1;
+  string path = 2;
+  uint64 size = 3;
+  uint32 perm = 4;
+}
+
+message FileTransferChunk {
+  bytes data = 1;
+  uint64 offset = 2;
+  bool eof = 3;
+}
+
+message FileTransferResult {
+  bool success = 1;
+  string message = 2;
+  uint64 size = 3;
+  bool done = 4;
+  uint32 perm = 5;
 }

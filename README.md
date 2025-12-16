@@ -36,6 +36,24 @@ Quick Start
 	qsh -i ./id_hppk -n client-1 203.0.113.10:2323
 	```
 
+Copying Files
+-------------
+The `copy` subcommand reuses the same identity flags as the interactive client while accepting SCP-style targets in the form `client-id@host:/remote/path`. Exactly one endpoint must be remote.
+
+- Upload a local file to the server (defaults to TCP port 2222 when no `:port` suffix is present):
+
+	```bash
+	qsh copy -i ./id_hppk ./notes.txt client-1@example.com:/tmp/notes.txt
+	```
+
+- Download a remote file to the current directory, overriding the port with `-P`:
+
+	```bash
+	qsh copy -i ./id_hppk -P 4242 client-1@example.com:/var/log/qsh.log ./qsh.log
+	```
+
+Both commands authenticate as `client-1` (taken either from the remote spec or via `-n/--id`) and automatically derive the encrypted file-transfer channel.
+
 Client Registry Configuration
 -----------------------------
 Instead of listing every `--client` flag on the command line, the server can load its allowlist from a JSON file via `--clients-config`:

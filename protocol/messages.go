@@ -17,12 +17,20 @@ func (*Envelope) ProtoMessage()    {}
 
 // ClientHello identifies the connecting client.
 type ClientHello struct {
-	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	ClientId string     `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Mode     ClientMode `protobuf:"varint,2,opt,name=mode,proto3,enum=qsh.protocol.ClientMode" json:"mode,omitempty"`
 }
 
 func (m *ClientHello) Reset()         { *m = ClientHello{} }
 func (m *ClientHello) String() string { return proto.CompactTextString(m) }
 func (*ClientHello) ProtoMessage()    {}
+
+type ClientMode int32
+
+const (
+	ClientMode_CLIENT_MODE_SHELL ClientMode = 0
+	ClientMode_CLIENT_MODE_COPY  ClientMode = 1
+)
 
 // AuthChallenge carries the random challenge and encrypted session key.
 type AuthChallenge struct {
@@ -84,8 +92,11 @@ func (*SecureData) ProtoMessage()    {}
 
 // PlainPayload represents plaintext terminal data or control signals.
 type PlainPayload struct {
-	Stream []byte  `protobuf:"bytes,1,opt,name=stream,proto3" json:"stream,omitempty"`
-	Resize *Resize `protobuf:"bytes,2,opt,name=resize,proto3" json:"resize,omitempty"`
+	Stream      []byte               `protobuf:"bytes,1,opt,name=stream,proto3" json:"stream,omitempty"`
+	Resize      *Resize              `protobuf:"bytes,2,opt,name=resize,proto3" json:"resize,omitempty"`
+	FileRequest *FileTransferRequest `protobuf:"bytes,3,opt,name=file_request,json=fileRequest,proto3" json:"file_request,omitempty"`
+	FileChunk   *FileTransferChunk   `protobuf:"bytes,4,opt,name=file_chunk,json=fileChunk,proto3" json:"file_chunk,omitempty"`
+	FileResult  *FileTransferResult  `protobuf:"bytes,5,opt,name=file_result,json=fileResult,proto3" json:"file_result,omitempty"`
 }
 
 func (m *PlainPayload) Reset()         { *m = PlainPayload{} }
@@ -101,3 +112,43 @@ type Resize struct {
 func (m *Resize) Reset()         { *m = Resize{} }
 func (m *Resize) String() string { return proto.CompactTextString(m) }
 func (*Resize) ProtoMessage()    {}
+
+type FileDirection int32
+
+const (
+	FileDirection_FILE_DIRECTION_UPLOAD   FileDirection = 0
+	FileDirection_FILE_DIRECTION_DOWNLOAD FileDirection = 1
+)
+
+type FileTransferRequest struct {
+	Direction FileDirection `protobuf:"varint,1,opt,name=direction,proto3,enum=qsh.protocol.FileDirection" json:"direction,omitempty"`
+	Path      string        `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Size      uint64        `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	Perm      uint32        `protobuf:"varint,4,opt,name=perm,proto3" json:"perm,omitempty"`
+}
+
+func (m *FileTransferRequest) Reset()         { *m = FileTransferRequest{} }
+func (m *FileTransferRequest) String() string { return proto.CompactTextString(m) }
+func (*FileTransferRequest) ProtoMessage()    {}
+
+type FileTransferChunk struct {
+	Data   []byte `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	Offset uint64 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Eof    bool   `protobuf:"varint,3,opt,name=eof,proto3" json:"eof,omitempty"`
+}
+
+func (m *FileTransferChunk) Reset()         { *m = FileTransferChunk{} }
+func (m *FileTransferChunk) String() string { return proto.CompactTextString(m) }
+func (*FileTransferChunk) ProtoMessage()    {}
+
+type FileTransferResult struct {
+	Success bool   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Size    uint64 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	Done    bool   `protobuf:"varint,4,opt,name=done,proto3" json:"done,omitempty"`
+	Perm    uint32 `protobuf:"varint,5,opt,name=perm,proto3" json:"perm,omitempty"`
+}
+
+func (m *FileTransferResult) Reset()         { *m = FileTransferResult{} }
+func (m *FileTransferResult) String() string { return proto.CompactTextString(m) }
+func (*FileTransferResult) ProtoMessage()    {}

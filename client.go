@@ -69,7 +69,7 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	defer conn.Close()
 
 	// Perform handshake
-	writer, recvQPP, err := performClientHandshake(conn, priv, clientID)
+	writer, recvQPP, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
 	if err != nil {
 		return err
 	}
@@ -103,9 +103,9 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 }
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
-func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string) (*encryptedWriter, *qpp.QuantumPermutationPad, error) {
+func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*encryptedWriter, *qpp.QuantumPermutationPad, error) {
 	// 1. Send ClientHello
-	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID}}); err != nil {
+	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID, Mode: mode}}); err != nil {
 		return nil, nil, err
 	}
 	env := &protocol.Envelope{}

@@ -17,6 +17,7 @@ const (
 	exampleGenKey    = "qsh genkey -o ./id_hppk"
 	exampleServer    = "qsh server --clients-config /etc/qsh/clients.json"
 	exampleClient    = "qsh -i ./id_hppk -n client-1 127.0.0.1:2222"
+	exampleCopy      = "qsh copy ./file client-1@203.0.113.10:/tmp/file"
 )
 
 // main dispatches between key generation, server mode, and client mode.
@@ -45,6 +46,12 @@ func main() {
 				},
 				Action: runServerCommand,
 			},
+			{
+				Name:   "copy",
+				Usage:  "Securely copy files to/from a qsh server",
+				Flags:  copyCLIFlags(),
+				Action: runCopyCommand,
+			},
 		},
 		Action: runClientCommand,
 	}
@@ -59,6 +66,14 @@ func clientCLIFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
 		&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
+	}
+}
+
+func copyCLIFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
+		&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
+		&cli.IntFlag{Name: "port", Aliases: []string{"P"}, Value: 2222, Usage: "remote port when not specified in the target"},
 	}
 }
 
