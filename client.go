@@ -104,13 +104,13 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
 func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string) (*encryptedWriter, *qpp.QuantumPermutationPad, error) {
-	// Send ClientHello
+	// 1. Send ClientHello
 	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID}}); err != nil {
 		return nil, nil, err
 	}
 	env := &protocol.Envelope{}
 
-	// Receive AuthChallenge
+	// 2. Receive AuthChallenge
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return nil, nil, err
 	}
@@ -119,7 +119,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, nil, errors.New("handshake: expected challenge")
 	}
 
-	// Decrypt KEM and derive master seed
+	// 3. Decrypt KEM and derive master seed
 	kem := &hppk.KEM{P: new(big.Int).SetBytes(challenge.KemP), Q: new(big.Int).SetBytes(challenge.KemQ)}
 	secret, err := priv.Decrypt(kem)
 	if err != nil {
@@ -139,7 +139,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	masterSeed := make([]byte, keySize)
 	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
 
-	// Sign challenge and send AuthResponse
+	// 4. Sign challenge and send AuthResponse
 	sig, err := priv.Sign(challenge.Challenge)
 	if err != nil {
 		return nil, nil, err
@@ -149,7 +149,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, nil, err
 	}
 
-	// Receive AuthResult
+	// 5. Receive AuthResult
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return nil, nil, err
@@ -162,7 +162,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, nil, errors.New(msg)
 	}
 
-	// Prepare QPP pads
+	// 6. Prepare QPP pads for symmetric encryption
 	pads := uint16(challenge.Pads)
 	if !validatePadCount(pads) {
 		return nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, minPadCount, maxPadCount)

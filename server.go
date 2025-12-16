@@ -113,7 +113,7 @@ func handleServerConn(conn net.Conn, registry clientRegistry) error {
 
 // performServerHandshake authenticates the client and derives QPP pads.
 func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
-	// Receive ClientHello
+	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
@@ -124,6 +124,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, errors.New("handshake: missing client hello")
 	}
 
+	// 2. Lookup client public key
 	clientID := env.ClientHello.ClientId
 	pub, ok := registry[clientID]
 	if !ok {
@@ -131,7 +132,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, fmt.Errorf("unknown client %s", clientID)
 	}
 
-	// Challenge client with random nonce
+	// 3. Get random nonce as challenge
 	challenge := make([]byte, 48)
 	if _, err := rand.Read(challenge); err != nil {
 		return "", nil, nil, err
@@ -142,8 +143,8 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
-	// Generate KEM for master secret.
-	// NOTE(x): the length of masterSeed must match sessionKeyBytes,
+	// 4. Generate KEM for master secret(session key).
+	// 	NOTE(x): the length of masterSeed must match sessionKeyBytes,
 	// 	and the length of the key should be sent to the client.
 	masterSeed := make([]byte, sessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
@@ -155,7 +156,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
-	// Send session key and challenge to client
+	// 5. Send session key and challenge to client
 	challengeMsg := &protocol.Envelope{AuthChallenge: &protocol.AuthChallenge{
 		Challenge:      challenge,
 		KemP:           kem.P.Bytes(),
@@ -168,7 +169,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
-	// Receive AuthResponse and decode signature
+	// 5. Receive AuthResponse and decode signature
 	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return "", nil, nil, err
@@ -190,7 +191,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, fmt.Errorf("decode signature: %w", err)
 	}
 
-	// Verify signature over challenge
+	// 6. Verify signature over challenge
 	if !hppk.VerifySignature(sig, challenge, pub) {
 		_ = sendAuthResult(conn, false, "signature verification failed")
 		return "", nil, nil, errors.New("handshake: signature verification failed")
@@ -199,7 +200,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
-	// Derive directional QPP seeds
+	// 7. Prepare QPP pads for symmetric encryption
 	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
 		return "", nil, nil, err
@@ -209,7 +210,7 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 		return "", nil, nil, err
 	}
 
-	// Initialize encrypted writer and QPP receiver
+	// initialize encrypted writer and QPP receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount))
 	recv := qpp.NewQPP(c2sSeed, padCount)
 
