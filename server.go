@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +19,6 @@ import (
 	"github.com/xtaci/hppk"
 	"github.com/xtaci/qpp"
 	"github.com/xtaci/qsh/protocol"
-	"golang.org/x/crypto/hkdf"
 )
 
 // clientEntry binds a client identifier to a local path containing its public key.
@@ -29,27 +27,33 @@ type clientEntry struct {
 	path string
 }
 
+// registryLoader defines a function that loads a client registry.
 type registryLoader func() (clientRegistry, error)
 
+// clientRegistryStore provides atomic access to the client registry.
 type clientRegistryStore struct {
 	value atomic.Value
 }
 
+// newClientRegistryStore creates a new clientRegistryStore initialized with reg.
 func newClientRegistryStore(reg clientRegistry) *clientRegistryStore {
 	store := &clientRegistryStore{}
 	store.value.Store(reg)
 	return store
 }
 
+// Get retrieves the current client registry.
 func (s *clientRegistryStore) Get() clientRegistry {
 	reg, _ := s.value.Load().(clientRegistry)
 	return reg
 }
 
+// Replace updates the client registry with reg.
 func (s *clientRegistryStore) Replace(reg clientRegistry) {
 	s.value.Store(reg)
 }
 
+// parseClientEntries parses client entries from command-line arguments.
 func parseClientEntries(values []string) ([]clientEntry, error) {
 	var entries []clientEntry
 	for _, value := range values {
@@ -67,6 +71,7 @@ func parseClientEntries(values []string) ([]clientEntry, error) {
 	return entries, nil
 }
 
+// server command implementation.
 func runServerCommand(c *cli.Context) error {
 	addr := c.String("listen")
 	if addr == "" {
@@ -132,6 +137,7 @@ func runServer(addr string, store *clientRegistryStore, loader registryLoader, w
 	}
 }
 
+// watchRegistryReload listens for SIGUSR1 and reloads the client registry.
 func watchRegistryReload(store *clientRegistryStore, loader registryLoader) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGUSR1)
@@ -292,24 +298,6 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 func sendAuthResult(conn net.Conn, ok bool, message string) error {
 	env := &protocol.Envelope{AuthResult: &protocol.AuthResult{Success: ok, Message: message}}
 	return protocol.WriteMessage(conn, env)
-}
-
-// deriveDirectionalSeed deterministically expands the shared master secret per direction.
-func deriveDirectionalSeed(master []byte, label string) ([]byte, error) {
-	return deriveKeyMaterial(master, label, sessionKeyBytes)
-}
-
-func deriveDirectionalMAC(master []byte, label string) ([]byte, error) {
-	return deriveKeyMaterial(master, label, hmacKeyBytes)
-}
-
-func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {
-	h := hkdf.New(sha256.New, master, nil, []byte(label))
-	out := make([]byte, size)
-	if _, err := io.ReadFull(h, out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // handleInteractiveShell bridges the remote PTY with the encrypted stream.

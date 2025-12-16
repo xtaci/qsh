@@ -5,16 +5,26 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/xtaci/hppk"
+	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
 	"golang.org/x/term"
 )
+
+// sessionKeyBytes defines how many bytes of keying material we derive for each
+// QPP pad direction.
+const sessionKeyBytes = 256
+
+// hmacKeyBytes defines the length of the per-direction integrity key.
+const hmacKeyBytes = 32
 
 // loadPrivateKey reads an HPPK private key and decrypts it if needed.
 func loadPrivateKey(path string) (*hppk.PrivateKey, error) {
@@ -235,4 +245,22 @@ func promptPassword(prompt string, confirm bool) ([]byte, error) {
 		clear(confirmPass)
 	}
 	return pass, nil
+}
+
+// deriveDirectionalSeed deterministically expands the shared master secret per direction.
+func deriveDirectionalSeed(master []byte, label string) ([]byte, error) {
+	return deriveKeyMaterial(master, label, sessionKeyBytes)
+}
+
+func deriveDirectionalMAC(master []byte, label string) ([]byte, error) {
+	return deriveKeyMaterial(master, label, hmacKeyBytes)
+}
+
+func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {
+	h := hkdf.New(sha256.New, master, nil, []byte(label))
+	out := make([]byte, size)
+	if _, err := io.ReadFull(h, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

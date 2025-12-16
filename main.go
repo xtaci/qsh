@@ -8,13 +8,6 @@ import (
 	cli "github.com/urfave/cli/v2"
 )
 
-// sessionKeyBytes defines how many bytes of keying material we derive for each
-// QPP pad direction.
-const sessionKeyBytes = 256
-
-// hmacKeyBytes defines the length of the per-direction integrity key.
-const hmacKeyBytes = 32
-
 const (
 	encryptedKeyType = "encrypted-hppk"
 	exampleGenKey    = "qsh genkey -o ./id_hppk"

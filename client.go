@@ -207,19 +207,19 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	}
 
 	// Derive directional MAC keys
-	c2sMac, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	c2sMacKey, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	s2cMac, err := deriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	s2cMacKey, err := deriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	// Create encrypted writer and receiver
-	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMac)
+	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMacKey)
 	recv := qpp.NewQPP(s2cSeed, pads)
-	return writer, recv, s2cMac, nil
+	return writer, recv, s2cMacKey, nil
 }
 
 // forwardStdIn encrypts and forwards local keystrokes to the server.
@@ -240,9 +240,9 @@ func forwardStdIn(writer *encryptedWriter) error {
 }
 
 // readServerOutput decrypts server payloads and writes them to stdout.
-func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, recvMac []byte) error {
+func readServerOutput(conn net.Conn, recvQPP *qpp.QuantumPermutationPad, s2cMacKey []byte) error {
 	for {
-		payload, err := receivePayload(conn, recvQPP, recvMac)
+		payload, err := receivePayload(conn, recvQPP, s2cMacKey)
 		if err != nil {
 			return err
 		}

@@ -9,15 +9,18 @@ import (
 	"strings"
 )
 
+// clientConfigFile represents the structure of the JSON configuration file
 type clientConfigFile struct {
 	Clients []clientConfigEntry `json:"clients"`
 }
 
+// clientConfigEntry represents a single client entry in the configuration file
 type clientConfigEntry struct {
 	ID        string `json:"id"`
 	PublicKey string `json:"public_key"`
 }
 
+// loadClientEntriesFromConfig reads and parses the client configuration file
 func loadClientEntriesFromConfig(path string) ([]clientEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -43,6 +46,7 @@ func loadClientEntriesFromConfig(path string) ([]clientEntry, error) {
 	return entries, nil
 }
 
+// loadRegistryFromSources combines client entries from CLI and config file, and loads the registry
 func loadRegistryFromSources(cliEntries []clientEntry, configPath string) (clientRegistry, error) {
 	combined := make([]clientEntry, 0, len(cliEntries))
 	if configPath != "" {
