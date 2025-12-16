@@ -88,12 +88,12 @@ func isIdentityError(err error) bool {
 		strings.Contains(msg, "decrypt")
 }
 
-// ClientSession bundles the encryption primitives established during the client handshake.
-type ClientSession struct {
-	Conn    net.Conn
-	Writer  *encryptedWriter
-	RecvPad *qpp.QuantumPermutationPad
-	RecvMac []byte
+// clientSession bundles the encryption primitives established during the client handshake.
+type clientSession struct {
+	Conn       net.Conn
+	Writer     *encryptedWriter
+	RecvPad    *qpp.QuantumPermutationPad
+	RecvMacKey []byte
 }
 
 // runClient dials the server, completes the handshake, and attaches local TTY IO.
@@ -140,7 +140,7 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 }
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
-func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*ClientSession, error) {
+func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*clientSession, error) {
 	// 1. Send ClientHello
 	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID, Mode: mode}}); err != nil {
 		return nil, err
@@ -228,11 +228,11 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	// Create encrypted writer and receiver
 	writer := newEncryptedWriter(conn, qpp.NewQPP(c2sSeed, pads), c2sMacKey)
 	recv := qpp.NewQPP(s2cSeed, pads)
-	return &ClientSession{Conn: conn, Writer: writer, RecvPad: recv, RecvMac: s2cMacKey}, nil
+	return &clientSession{Conn: conn, Writer: writer, RecvPad: recv, RecvMacKey: s2cMacKey}, nil
 }
 
 // forwardStdIn encrypts and forwards local keystrokes to the server.
-func (s *ClientSession) forwardStdIn() error {
+func (s *clientSession) forwardStdIn() error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
@@ -249,9 +249,9 @@ func (s *ClientSession) forwardStdIn() error {
 }
 
 // readServerOutput decrypts server payloads and writes them to stdout.
-func (s *ClientSession) readServerOutput() error {
+func (s *clientSession) readServerOutput() error {
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
 		if err != nil {
 			return err
 		}
@@ -264,7 +264,7 @@ func (s *ClientSession) readServerOutput() error {
 }
 
 // handleClientResize pushes terminal size updates to the remote PTY.
-func (s *ClientSession) handleClientResize(done <-chan struct{}) {
+func (s *clientSession) handleClientResize(done <-chan struct{}) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGWINCH)
 	defer signal.Stop(sigCh)
@@ -281,7 +281,7 @@ func (s *ClientSession) handleClientResize(done <-chan struct{}) {
 }
 
 // getWinsize returns the caller TTY dimensions, falling back to 80x24.
-func (s *ClientSession) getWinsize() (rows, cols uint16) {
+func (s *clientSession) getWinsize() (rows, cols uint16) {
 	w, h, err := term.GetSize(int(os.Stdin.Fd()))
 	if err != nil {
 		return 24, 80

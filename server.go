@@ -100,14 +100,14 @@ func runServerCommand(c *cli.Context) error {
 // clientRegistry maps client IDs onto their trusted public keys.
 type clientRegistry map[string]*hppk.PublicKey
 
-// ServerSession encapsulates per-client state derived during the handshake.
-type ServerSession struct {
-	Conn     net.Conn
-	Writer   *encryptedWriter
-	RecvPad  *qpp.QuantumPermutationPad
-	RecvMac  []byte
-	ClientID string
-	Mode     protocol.ClientMode
+// serverSession encapsulates per-client state derived during the handshake.
+type serverSession struct {
+	Conn       net.Conn
+	Writer     *encryptedWriter
+	RecvPad    *qpp.QuantumPermutationPad
+	RecvMacKey []byte
+	ClientID   string
+	Mode       protocol.ClientMode
 }
 
 // loadClientRegistry loads each allowed client's public key once at startup.
@@ -182,8 +182,8 @@ func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*ServerSession, error) {
-	session := &ServerSession{Conn: conn}
+func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverSession, error) {
+	session := &serverSession{Conn: conn}
 	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
@@ -304,19 +304,19 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*ServerS
 	// initialize encrypted writer and QPP receiver
 	session.Writer = newEncryptedWriter(conn, qpp.NewQPP(s2cSeed, padCount), s2cMac)
 	session.RecvPad = qpp.NewQPP(c2sSeed, padCount)
-	session.RecvMac = c2sMac
+	session.RecvMacKey = c2sMac
 
 	return session, nil
 }
 
 // sendAuthResult sends a simple AuthResult envelope to the peer.
-func (s *ServerSession) sendAuthResult(ok bool, message string) error {
+func (s *serverSession) sendAuthResult(ok bool, message string) error {
 	env := &protocol.Envelope{AuthResult: &protocol.AuthResult{Success: ok, Message: message}}
 	return protocol.WriteMessage(s.Conn, env)
 }
 
 // handleInteractiveShell bridges the remote PTY with the encrypted stream.
-func (s *ServerSession) handleInteractiveShell() error {
+func (s *serverSession) handleInteractiveShell() error {
 	cmd := exec.Command("/bin/sh")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -336,7 +336,7 @@ func (s *ServerSession) handleInteractiveShell() error {
 }
 
 // forwardPTYToClient streams PTY output toward the client.
-func (s *ServerSession) forwardPTYToClient(ptmx *os.File) error {
+func (s *serverSession) forwardPTYToClient(ptmx *os.File) error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := ptmx.Read(buf)
@@ -356,9 +356,9 @@ func (s *ServerSession) forwardPTYToClient(ptmx *os.File) error {
 }
 
 // forwardClientToPTY feeds decrypted client data back into the PTY.
-func (s *ServerSession) forwardClientToPTY(ptmx *os.File) error {
+func (s *serverSession) forwardClientToPTY(ptmx *os.File) error {
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
 		if err != nil {
 			return err
 		}
@@ -374,7 +374,7 @@ func (s *ServerSession) forwardClientToPTY(ptmx *os.File) error {
 }
 
 // applyResize resizes the PTY; errors are ignored because resize is best-effort.
-func (s *ServerSession) applyResize(ptmx *os.File, resize *protocol.Resize) {
+func (s *serverSession) applyResize(ptmx *os.File, resize *protocol.Resize) {
 	rows := uint16(resize.Rows)
 	cols := uint16(resize.Cols)
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})

@@ -105,7 +105,7 @@ func executeCopySession(addr string, priv *hppk.PrivateKey, clientID string, dir
 }
 
 // uploadFile streams a local file to the remote server over an authenticated client session.
-func (s *ClientSession) uploadFile(localPath, remotePath string) error {
+func (s *clientSession) uploadFile(localPath, remotePath string) error {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return err
@@ -167,7 +167,7 @@ func (s *ClientSession) uploadFile(localPath, remotePath string) error {
 }
 
 // downloadFile pulls a remote file to the local filesystem via an established client session.
-func (s *ClientSession) downloadFile(localPath, remotePath string) error {
+func (s *clientSession) downloadFile(localPath, remotePath string) error {
 	if localPath == "" {
 		return errors.New("missing local destination path")
 	}
@@ -198,7 +198,7 @@ func (s *ClientSession) downloadFile(localPath, remotePath string) error {
 	defer file.Close()
 	var offset uint64
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
 		if err != nil {
 			return err
 		}
@@ -238,9 +238,9 @@ func (s *ClientSession) downloadFile(localPath, remotePath string) error {
 	return nil
 }
 
-func (s *ClientSession) awaitFileResult() (*protocol.FileTransferResult, error) {
+func (s *clientSession) awaitFileResult() (*protocol.FileTransferResult, error) {
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
 		if err != nil {
 			return nil, err
 		}
@@ -288,8 +288,8 @@ func parseRemoteTarget(arg string) (remoteTarget, bool, error) {
 }
 
 // handleFileTransferSession orchestrates upload/download flows for copy mode clients.
-func (s *ServerSession) handleFileTransferSession() error {
-	payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
+func (s *serverSession) handleFileTransferSession() error {
+	payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
 	if err != nil {
 		return err
 	}
@@ -309,7 +309,7 @@ func (s *ServerSession) handleFileTransferSession() error {
 	}
 }
 
-func (s *ServerSession) handleUploadTransfer(req *protocol.FileTransferRequest) error {
+func (s *serverSession) handleUploadTransfer(req *protocol.FileTransferRequest) error {
 	path, err := sanitizeCopyPath(req.Path)
 	if err != nil {
 		_ = s.sendCopyResult(false, err.Error(), 0, true, 0)
@@ -330,7 +330,7 @@ func (s *ServerSession) handleUploadTransfer(req *protocol.FileTransferRequest) 
 	}
 	var written uint64
 	for {
-		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMac)
+		payload, err := receivePayload(s.Conn, s.RecvPad, s.RecvMacKey)
 		if err != nil {
 			_ = s.sendCopyResult(false, err.Error(), written, true, uint32(perm))
 			return err
@@ -364,7 +364,7 @@ func (s *ServerSession) handleUploadTransfer(req *protocol.FileTransferRequest) 
 	return s.sendCopyResult(true, "upload complete", written, true, uint32(perm))
 }
 
-func (s *ServerSession) handleDownloadTransfer(req *protocol.FileTransferRequest) error {
+func (s *serverSession) handleDownloadTransfer(req *protocol.FileTransferRequest) error {
 	path, err := sanitizeCopyPath(req.Path)
 	if err != nil {
 		_ = s.sendCopyResult(false, err.Error(), 0, true, 0)
@@ -419,7 +419,7 @@ func sanitizeCopyPath(path string) (string, error) {
 	return filepath.Clean(trimmed), nil
 }
 
-func (s *ServerSession) sendCopyResult(ok bool, message string, size uint64, done bool, perm uint32) error {
+func (s *serverSession) sendCopyResult(ok bool, message string, size uint64, done bool, perm uint32) error {
 	res := &protocol.FileTransferResult{Success: ok, Message: message, Size: size, Done: done, Perm: perm}
 	return s.Writer.Send(&protocol.PlainPayload{FileResult: res})
 }
