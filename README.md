@@ -36,6 +36,23 @@ Quick Start
 	qsh -i ./id_hppk -n client-1 203.0.113.10:2323
 	```
 
+Client Registry Configuration
+-----------------------------
+Instead of listing every `--client` flag on the command line, the server can load its allowlist from a JSON file via `--clients-config`:
+
+```json
+{
+	"clients": [
+        { "id": "xtaci", "public_key": "/home/xtaci/xtaci.pub" },
+		{ "id": "ops-admin", "public_key": "/etc/qsh/ops-admin.pub" }
+	]
+}
+```
+
+- Each entry must provide a unique `id` plus the filesystem path of the corresponding HPPK public key.
+- Combine the JSON file with extra `--client id=/path` flags to layer temporary overrides.
+- Send `SIGUSR1` to the running server process (e.g., `kill -USR1 <pid>`) whenever the file changes to trigger an in-place reload of the registry.
+
 Protocol Highlights
 -------------------
 1. **ClientHello** – announces a client ID.

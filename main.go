@@ -15,8 +15,8 @@ const sessionKeyBytes = 256
 const (
 	encryptedKeyType = "encrypted-hppk"
 	exampleGenKey    = "qsh genkey -o ./id_hppk"
-	exampleServer    = "qsh server -l :2323 -c client-1=/etc/qsh/id_hppk.pub"
-	exampleClient    = "qsh -i ./id_hppk -n client-1 127.0.0.1:2323"
+	exampleServer    = "qsh server --clients-config /etc/qsh/clients.json"
+	exampleClient    = "qsh -i ./id_hppk -n client-1 127.0.0.1:2222"
 )
 
 // main dispatches between key generation, server mode, and client mode.
@@ -39,8 +39,9 @@ func main() {
 				Name:  "server",
 				Usage: "Run qsh in server mode",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "listen", Aliases: []string{"l"}, Usage: "listen address (e.g. :2323)", Required: true},
+					&cli.StringFlag{Name: "listen", Aliases: []string{"l"}, Value: ":2222", Usage: "listen address (default :2222)"},
 					&cli.StringSliceFlag{Name: "client", Aliases: []string{"c"}, Usage: "allowed client entry in the form id=/path/to/id_hppk.pub (repeatable)"},
+					&cli.StringFlag{Name: "clients-config", Aliases: []string{"C"}, Usage: "path to JSON file mapping client IDs to public keys"},
 				},
 				Action: runServerCommand,
 			},

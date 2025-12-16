@@ -10,7 +10,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/creack/pty"
 	cli "github.com/urfave/cli/v2"
@@ -24,6 +27,27 @@ import (
 type clientEntry struct {
 	id   string
 	path string
+}
+
+type registryLoader func() (clientRegistry, error)
+
+type clientRegistryStore struct {
+	value atomic.Value
+}
+
+func newClientRegistryStore(reg clientRegistry) *clientRegistryStore {
+	store := &clientRegistryStore{}
+	store.value.Store(reg)
+	return store
+}
+
+func (s *clientRegistryStore) Get() clientRegistry {
+	reg, _ := s.value.Load().(clientRegistry)
+	return reg
+}
+
+func (s *clientRegistryStore) Replace(reg clientRegistry) {
+	s.value.Store(reg)
 }
 
 func parseClientEntries(values []string) ([]clientEntry, error) {
@@ -48,18 +72,23 @@ func runServerCommand(c *cli.Context) error {
 	if addr == "" {
 		return exitWithExample("server command requires --listen", exampleServer)
 	}
+	configPath := c.String("clients-config")
 	entries, err := parseClientEntries(c.StringSlice("client"))
 	if err != nil {
 		return exitWithExample(err.Error(), exampleServer)
 	}
-	if len(entries) == 0 {
-		return exitWithExample("server command requires at least one --client entry", exampleServer)
+	if configPath == "" && len(entries) == 0 {
+		return exitWithExample("server command requires --clients-config or at least one --client entry", exampleServer)
 	}
-	registry, err := loadClientRegistry(entries)
+	loader := func() (clientRegistry, error) {
+		return loadRegistryFromSources(entries, configPath)
+	}
+	registry, err := loader()
 	if err != nil {
 		return err
 	}
-	return runServer(addr, registry)
+	store := newClientRegistryStore(registry)
+	return runServer(addr, store, loader, configPath != "")
 }
 
 // clientRegistry maps client IDs onto their trusted public keys.
@@ -79,12 +108,15 @@ func loadClientRegistry(entries []clientEntry) (clientRegistry, error) {
 }
 
 // runServer accepts TCP clients and performs the secure handshake per session.
-func runServer(addr string, registry clientRegistry) error {
+func runServer(addr string, store *clientRegistryStore, loader registryLoader, watchReload bool) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	log.Printf("listening on %s", addr)
+	if watchReload && loader != nil {
+		go watchRegistryReload(store, loader)
+	}
 
 	for {
 		conn, err := ln.Accept()
@@ -93,17 +125,33 @@ func runServer(addr string, registry clientRegistry) error {
 			continue
 		}
 		go func() {
-			if err := handleServerConn(conn, registry); err != nil {
+			if err := handleServerConn(conn, store); err != nil {
 				log.Printf("connection closed: %v", err)
 			}
 		}()
 	}
 }
 
+func watchRegistryReload(store *clientRegistryStore, loader registryLoader) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGUSR1)
+	defer signal.Stop(sigCh)
+	for range sigCh {
+		log.Printf("received SIGUSR1, reloading client registry")
+		registry, err := loader()
+		if err != nil {
+			log.Printf("client registry reload failed: %v", err)
+			continue
+		}
+		store.Replace(registry)
+		log.Printf("client registry reloaded (%d clients)", len(registry))
+	}
+}
+
 // handleServerConn runs the handshake and launches the PTY bridge for a client.
-func handleServerConn(conn net.Conn, registry clientRegistry) error {
+func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
 	defer conn.Close()
-	clientID, writer, recvQPP, err := performServerHandshake(conn, registry)
+	clientID, writer, recvQPP, err := performServerHandshake(conn, store)
 	if err != nil {
 		return err
 	}
@@ -112,7 +160,7 @@ func handleServerConn(conn net.Conn, registry clientRegistry) error {
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
+func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, *encryptedWriter, *qpp.QuantumPermutationPad, error) {
 	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
@@ -126,6 +174,11 @@ func performServerHandshake(conn net.Conn, registry clientRegistry) (string, *en
 
 	// 2. Lookup client public key
 	clientID := env.ClientHello.ClientId
+	registry := store.Get()
+	if registry == nil {
+		_ = sendAuthResult(conn, false, "registry unavailable")
+		return "", nil, nil, errors.New("handshake: registry unavailable")
+	}
 	pub, ok := registry[clientID]
 	if !ok {
 		_ = sendAuthResult(conn, false, "unknown client")
