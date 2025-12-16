@@ -18,6 +18,7 @@ import (
 	cli "github.com/urfave/cli/v2"
 	"github.com/xtaci/hppk"
 	"github.com/xtaci/qpp"
+	qcrypto "github.com/xtaci/qsh/crypto"
 	"github.com/xtaci/qsh/protocol"
 )
 
@@ -103,7 +104,7 @@ type clientRegistry map[string]*hppk.PublicKey
 func loadClientRegistry(entries []clientEntry) (clientRegistry, error) {
 	reg := make(clientRegistry)
 	for _, entry := range entries {
-		pub, err := loadPublicKey(entry.path)
+		pub, err := qcrypto.LoadPublicKey(entry.path)
 		if err != nil {
 			return nil, fmt.Errorf("load %s: %w", entry.path, err)
 		}
@@ -207,15 +208,15 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 		return "", 0, nil, nil, nil, err
 	}
 
-	padCount, err := randomPrimePadCount()
+	padCount, err := qcrypto.RandomPrimePadCount()
 	if err != nil {
 		return "", 0, nil, nil, nil, err
 	}
 
 	// 4. Generate KEM for master secret(session key).
-	// 	NOTE(x): the length of masterSeed must match sessionKeyBytes,
+	// 	NOTE(x): the length of masterSeed must match SessionKeyBytes,
 	// 	and the length of the key should be sent to the client.
-	masterSeed := make([]byte, sessionKeyBytes)
+	masterSeed := make([]byte, qcrypto.SessionKeyBytes)
 	if _, err := rand.Read(masterSeed); err != nil {
 		return "", 0, nil, nil, nil, err
 	}
@@ -231,7 +232,7 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 		KemP:           kem.P.Bytes(),
 		KemQ:           kem.Q.Bytes(),
 		Pads:           uint32(padCount),
-		SessionKeySize: sessionKeyBytes,
+		SessionKeySize: qcrypto.SessionKeyBytes,
 	}}
 
 	if err := protocol.WriteMessage(conn, challengeMsg); err != nil {
@@ -254,7 +255,7 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 		return "", 0, nil, nil, nil, errors.New("handshake: client id mismatch")
 	}
 
-	sig, err := signatureFromProto(env.AuthResponse.Signature)
+	sig, err := qcrypto.SignatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
 		_ = sendAuthResult(conn, false, "invalid signature payload")
 		return "", 0, nil, nil, nil, fmt.Errorf("decode signature: %w", err)
@@ -270,19 +271,19 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (string, 
 	}
 
 	// 7. Prepare QPP pads for symmetric encryption
-	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
+	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
 		return "", 0, nil, nil, nil, err
 	}
-	s2cSeed, err := deriveDirectionalSeed(masterSeed, "qsh-s2c")
+	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
 		return "", 0, nil, nil, nil, err
 	}
-	c2sMac, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	c2sMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
 	if err != nil {
 		return "", 0, nil, nil, nil, err
 	}
-	s2cMac, err := deriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	s2cMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
 	if err != nil {
 		return "", 0, nil, nil, nil, err
 	}

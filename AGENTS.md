@@ -8,4 +8,11 @@ The client connects to the server using hppk for authentication and establishes 
 
 The server supports multiple concurrent client connections, allowing multiple users to access the server simultaneously.
 
-The main features of client is implemented in client.go and server in server.go.
+The main interactive shell features is implemented in client.go and server.go.
+
+file.go implements file upload/download feature over the secure channel.
+
+channel.go implements the authenticated and encrypted channel using HMAC, and QPP
+
+The crypto/ directory has auxciliary cryptographic functions, including loading private keys from encrypted json file, signature decoding/encoding etc.
+

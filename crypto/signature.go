@@ -1,4 +1,4 @@
-package main
+package crypto
 
 import (
 	"errors"
@@ -8,8 +8,8 @@ import (
 	"github.com/xtaci/qsh/protocol"
 )
 
-// signatureToProto converts an HPPK signature into its protobuf equivalent.
-func signatureToProto(sig *hppk.Signature) *protocol.Signature {
+// SignatureToProto converts an HPPK signature into its protobuf equivalent.
+func SignatureToProto(sig *hppk.Signature) *protocol.Signature {
 	if sig == nil {
 		return nil
 	}
@@ -36,8 +36,8 @@ func signatureToProto(sig *hppk.Signature) *protocol.Signature {
 	return msg
 }
 
-// signatureFromProto rebuilds an HPPK signature from protobuf bytes.
-func signatureFromProto(msg *protocol.Signature) (*hppk.Signature, error) {
+// SignatureFromProto rebuilds an HPPK signature from protobuf bytes.
+func SignatureFromProto(msg *protocol.Signature) (*hppk.Signature, error) {
 	if msg == nil {
 		return nil, errors.New("missing signature payload")
 	}

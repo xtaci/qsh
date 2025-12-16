@@ -1,4 +1,4 @@
-package main
+package crypto
 
 import (
 	"bytes"
@@ -19,22 +19,22 @@ import (
 	"golang.org/x/term"
 )
 
-// sessionKeyBytes defines how many bytes of keying material we derive for each
+// SessionKeyBytes defines how many bytes of keying material we derive for each
 // QPP pad direction.
-const sessionKeyBytes = 256
+const SessionKeyBytes = 256
 
 // hmacKeyBytes defines the length of the per-direction integrity key.
 const hmacKeyBytes = 32
 
-// loadPrivateKey reads an HPPK private key and decrypts it if needed.
-func loadPrivateKey(path string) (*hppk.PrivateKey, error) {
+// LoadPrivateKey reads an HPPK private key and decrypts it if needed.
+func LoadPrivateKey(path string) (*hppk.PrivateKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var encrypted encryptedKeyFile
 	if err := json.Unmarshal(data, &encrypted); err == nil && encrypted.Type == encryptedKeyType {
-		pass, err := promptPassword(fmt.Sprintf("Enter passphrase for %s: ", path), false)
+		pass, err := PromptPassword(fmt.Sprintf("Enter passphrase for %s: ", path), false)
 		if err != nil {
 			return nil, err
 		}
@@ -59,8 +59,8 @@ func loadPrivateKey(path string) (*hppk.PrivateKey, error) {
 	return &priv, nil
 }
 
-// loadPublicKey reads a JSON-encoded HPPK public key.
-func loadPublicKey(path string) (*hppk.PublicKey, error) {
+// LoadPublicKey reads a JSON-encoded HPPK public key.
+func LoadPublicKey(path string) (*hppk.PublicKey, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -73,8 +73,8 @@ func loadPublicKey(path string) (*hppk.PublicKey, error) {
 	return &pub, nil
 }
 
-// generateKeyPair creates a new HPPK keypair, encrypts the private key, and persists both halves.
-func generateKeyPair(path string, strength int, passphrase []byte) error {
+// GenerateKeyPair creates a new HPPK keypair, encrypts the private key, and persists both halves.
+func GenerateKeyPair(path string, strength int, passphrase []byte) error {
 	if path == "" {
 		return errors.New("genkey requires a target path")
 	}
@@ -130,10 +130,11 @@ type encryptedKeyFile struct {
 }
 
 const (
-	kdfName     = "scrypt"
-	scryptCostN = 1 << 15
-	scryptCostR = 8
-	scryptCostP = 1
+	kdfName          = "scrypt"
+	scryptCostN      = 1 << 15
+	scryptCostR      = 8
+	scryptCostP      = 1
+	encryptedKeyType = "encrypted-hppk"
 )
 
 // encryptPrivateKey encrypts an HPPK private key using the given passphrase.
@@ -220,8 +221,8 @@ func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error)
 	return plain, nil
 }
 
-// promptPassword prompts the user for a password, optionally confirming it.
-func promptPassword(prompt string, confirm bool) ([]byte, error) {
+// PromptPassword prompts the user for a password, optionally confirming it.
+func PromptPassword(prompt string, confirm bool) ([]byte, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	pass, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
@@ -247,12 +248,13 @@ func promptPassword(prompt string, confirm bool) ([]byte, error) {
 	return pass, nil
 }
 
-// deriveDirectionalSeed deterministically expands the shared master secret per direction.
-func deriveDirectionalSeed(master []byte, label string) ([]byte, error) {
-	return deriveKeyMaterial(master, label, sessionKeyBytes)
+// DeriveDirectionalSeed deterministically expands the shared master secret per direction.
+func DeriveDirectionalSeed(master []byte, label string) ([]byte, error) {
+	return deriveKeyMaterial(master, label, SessionKeyBytes)
 }
 
-func deriveDirectionalMAC(master []byte, label string) ([]byte, error) {
+// DeriveDirectionalMAC returns the per-direction MAC key.
+func DeriveDirectionalMAC(master []byte, label string) ([]byte, error) {
 	return deriveKeyMaterial(master, label, hmacKeyBytes)
 }
 

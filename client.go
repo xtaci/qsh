@@ -14,6 +14,7 @@ import (
 	cli "github.com/urfave/cli/v2"
 	"github.com/xtaci/hppk"
 	"github.com/xtaci/qpp"
+	qcrypto "github.com/xtaci/qsh/crypto"
 	"github.com/xtaci/qsh/protocol"
 	"golang.org/x/term"
 )
@@ -62,7 +63,7 @@ func runClientCommand(c *cli.Context) error {
 	if identity == "" {
 		return exitWithExample("client command requires --identity", exampleClient)
 	}
-	priv, err := loadPrivateKey(identity)
+	priv, err := qcrypto.LoadPrivateKey(identity)
 	if err != nil {
 		return fmt.Errorf("%w\nExample: %s", err, exampleClient)
 	}
@@ -155,7 +156,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	}
 	keySize := int(challenge.SessionKeySize)
 	if keySize <= 0 {
-		keySize = sessionKeyBytes
+		keySize = qcrypto.SessionKeyBytes
 	}
 	secretBytes := secret.Bytes()
 	if len(secretBytes) > keySize {
@@ -172,7 +173,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: signatureToProto(sig)}}
+	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: qcrypto.SignatureToProto(sig)}}
 	if err := protocol.WriteMessage(conn, response); err != nil {
 		return nil, nil, nil, err
 	}
@@ -192,26 +193,26 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 
 	// 6. Prepare QPP pads for symmetric encryption
 	pads := uint16(challenge.Pads)
-	if !validatePadCount(pads) {
-		return nil, nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, minPadCount, maxPadCount)
+	if !qcrypto.ValidatePadCount(pads) {
+		return nil, nil, nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, qcrypto.MinPadCount, qcrypto.MaxPadCount)
 	}
 
 	// Derive directional seeds and create QPP instances
-	c2sSeed, err := deriveDirectionalSeed(masterSeed, "qsh-c2s")
+	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-c2s")
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	s2cSeed, err := deriveDirectionalSeed(masterSeed, "qsh-s2c")
+	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-s2c")
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	// Derive directional MAC keys
-	c2sMacKey, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	c2sMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	s2cMacKey, err := deriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	s2cMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -1,4 +1,4 @@
-package main
+package crypto
 
 import (
 	"crypto/rand"
@@ -7,16 +7,16 @@ import (
 )
 
 const (
-	minPadCount = 1024
-	maxPadCount = 2048
+	MinPadCount = 1024
+	MaxPadCount = 2048
 )
 
 var primePadCounts = generatePrimePadCounts()
 
-// generatePrimePadCounts generates a slice of prime numbers between minPadCount and maxPadCount.
+// generatePrimePadCounts generates a slice of prime numbers between MinPadCount and MaxPadCount.
 func generatePrimePadCounts() []uint16 {
 	var primes []uint16
-	for n := minPadCount; n <= maxPadCount; n++ {
+	for n := MinPadCount; n <= MaxPadCount; n++ {
 		if isPrime(n) {
 			primes = append(primes, uint16(n))
 		}
@@ -37,8 +37,8 @@ func isPrime(n int) bool {
 	return true
 }
 
-// randomPrimePadCount returns a random prime number between minPadCount and maxPadCount.
-func randomPrimePadCount() (uint16, error) {
+// RandomPrimePadCount returns a random prime number between MinPadCount and MaxPadCount.
+func RandomPrimePadCount() (uint16, error) {
 	if len(primePadCounts) == 0 {
 		return 0, errors.New("no prime pad counts available")
 	}
@@ -50,7 +50,7 @@ func randomPrimePadCount() (uint16, error) {
 	return primePadCounts[idx.Int64()], nil
 }
 
-// validatePadCount checks if the given pad count is a prime number within the valid range.
-func validatePadCount(p uint16) bool {
-	return int(p) >= minPadCount && int(p) <= maxPadCount && isPrime(int(p))
+// ValidatePadCount checks if the given pad count is a prime number within the valid range.
+func ValidatePadCount(p uint16) bool {
+	return int(p) >= MinPadCount && int(p) <= MaxPadCount && isPrime(int(p))
 }

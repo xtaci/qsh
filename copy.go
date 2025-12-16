@@ -12,6 +12,7 @@ import (
 	cli "github.com/urfave/cli/v2"
 	"github.com/xtaci/hppk"
 	"github.com/xtaci/qpp"
+	qcrypto "github.com/xtaci/qsh/crypto"
 	"github.com/xtaci/qsh/protocol"
 )
 
@@ -68,7 +69,7 @@ func runCopyCommand(c *cli.Context) error {
 	if remote.host == "" {
 		return exitWithExample("copy command requires a remote host", exampleCopy)
 	}
-	priv, err := loadPrivateKey(identity)
+	priv, err := qcrypto.LoadPrivateKey(identity)
 	if err != nil {
 		return err
 	}

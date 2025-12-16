@@ -6,14 +6,14 @@ import (
 	"os"
 
 	cli "github.com/urfave/cli/v2"
+	qcrypto "github.com/xtaci/qsh/crypto"
 )
 
 const (
-	encryptedKeyType = "encrypted-hppk"
-	exampleGenKey    = "qsh genkey -o ./id_hppk"
-	exampleServer    = "qsh server --clients-config /etc/qsh/clients.json"
-	exampleClient    = "qsh -i ./id_hppk -P 2222 client-1@127.0.0.1"
-	exampleCopy      = "qsh copy ./file client-1@203.0.113.10:/tmp/file"
+	exampleGenKey = "qsh genkey -o ./id_hppk"
+	exampleServer = "qsh server --clients-config /etc/qsh/clients.json"
+	exampleClient = "qsh -i ./id_hppk -P 2222 client-1@127.0.0.1"
+	exampleCopy   = "qsh copy ./file client-1@203.0.113.10:/tmp/file"
 )
 
 // main dispatches between key generation, server mode, and client mode.
@@ -84,7 +84,7 @@ func runGenKeyCommand(c *cli.Context) error {
 	if strength <= 0 {
 		return exitWithExample("--strength must be a positive integer", exampleGenKey)
 	}
-	pass, err := promptPassword("Enter passphrase for new private key: ", true)
+	pass, err := qcrypto.PromptPassword("Enter passphrase for new private key: ", true)
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func runGenKeyCommand(c *cli.Context) error {
 		return exitWithExample("passphrase cannot be empty", exampleGenKey)
 	}
 	defer clear(pass)
-	if err := generateKeyPair(path, strength, pass); err != nil {
+	if err := qcrypto.GenerateKeyPair(path, strength, pass); err != nil {
 		return fmt.Errorf("%w\nExample: %s", err, exampleGenKey)
 	}
 	return nil
