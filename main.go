@@ -21,7 +21,11 @@ func main() {
 	app := &cli.App{
 		Name:  "qsh",
 		Usage: "Secure remote shell using HPPK authentication and QPP encryption (client by default)",
-		Flags: clientCLIFlags(),
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
+			&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
+			&cli.IntFlag{Name: "port", Aliases: []string{"P"}, Value: 2222, Usage: "remote port when not specified in the target"},
+		},
 		Commands: []*cli.Command{
 			{
 				Name:  "genkey",
@@ -43,9 +47,14 @@ func main() {
 				Action: runServerCommand,
 			},
 			{
-				Name:   "copy",
-				Usage:  "Securely copy files to/from a qsh server",
-				Flags:  copyCLIFlags(),
+				Name:  "copy",
+				Usage: "Securely copy files to/from a qsh server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
+					&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
+					&cli.IntFlag{Name: "port", Aliases: []string{"P"}, Value: 2222, Usage: "remote port when not specified in the target"},
+				},
+
 				Action: runCopyCommand,
 			},
 		},
@@ -54,23 +63,6 @@ func main() {
 
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
-	}
-}
-
-// clientCLIFlags defines default client mode flags.
-func clientCLIFlags() []cli.Flag {
-	return []cli.Flag{
-		&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
-		&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
-		&cli.IntFlag{Name: "port", Aliases: []string{"P"}, Value: 2222, Usage: "remote port when not specified in the target"},
-	}
-}
-
-func copyCLIFlags() []cli.Flag {
-	return []cli.Flag{
-		&cli.StringFlag{Name: "identity", Aliases: []string{"i"}, Value: "./id_hppk", Usage: "path to the HPPK private key"},
-		&cli.StringFlag{Name: "id", Aliases: []string{"n"}, Value: "client-1", Usage: "client identifier presented during authentication"},
-		&cli.IntFlag{Name: "port", Aliases: []string{"P"}, Value: 2222, Usage: "remote port when not specified in the target"},
 	}
 }
 
