@@ -205,6 +205,8 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
+	// Derive directional MAC keys
 	c2sMac, err := deriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
 	if err != nil {
 		return nil, nil, nil, err

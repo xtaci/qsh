@@ -81,6 +81,7 @@ func decryptBuffer(qp *qpp.QuantumPermutationPad, data []byte) []byte {
 	return buf
 }
 
+// computePayloadHMAC computes an HMAC-SHA256 over data using key.
 func computePayloadHMAC(key, data []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(data)
