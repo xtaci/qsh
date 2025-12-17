@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/heap"
 	"io"
 	"net"
 	"sync"
@@ -126,7 +127,7 @@ func TestTimestampValidation(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
-// TestNoncePruning verifies that old nonces are cleaned up.
+// TestNoncePruning verifies that the nonce window is enforced by removing the oldest entries.
 func TestNoncePruning(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -140,34 +141,27 @@ func TestNoncePruning(t *testing.T) {
 	clientChannel := newEncryptedChannel(clientConn, sendPad, recvPad, macKey, macKey)
 	serverChannel := newEncryptedChannel(serverConn, recvPad, sendPad, macKey, macKey)
 
-	// Send multiple messages to populate nonce cache
-	for i := 0; i < 100; i++ {
-		testPayload := &protocol.PlainPayload{Stream: []byte("pruning test")}
-		errCh := make(chan error, 1)
-		go func() {
-			errCh <- clientChannel.Send(testPayload)
-		}()
-
-		_, err := serverChannel.Receive()
-		require.NoError(t, err)
-		require.NoError(t, <-errCh)
+	// Preload nonce cache to its window size limit
+	serverChannel.nonceMu.Lock()
+	for i := 0; i < nonceWindowSize; i++ {
+		heap.Push(&serverChannel.recvNonceHeap, nonceEntry{hash: uint64(i + 1), timestamp: int64(i)})
 	}
-
-	// Verify nonces are being tracked
-	serverChannel.nonceMu.Lock()
-	nonceCount := len(serverChannel.recvNonces)
 	serverChannel.nonceMu.Unlock()
 
-	require.Equal(t, 100, nonceCount, "all nonces should be tracked")
+	// Sending one more message should trigger pruning after receipt
+	testPayload := &protocol.PlainPayload{Stream: []byte("pruning test")}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- clientChannel.Send(testPayload)
+	}()
 
-	// Simulate passage of time by manually pruning old nonces
-	futureTime := time.Now().Unix() + maxTimestampSkew + 100
+	_, err := serverChannel.Receive()
+	require.NoError(t, err)
+	require.NoError(t, <-errCh)
+
 	serverChannel.nonceMu.Lock()
-	serverChannel.pruneOldNonces(futureTime)
-	prunedCount := len(serverChannel.recvNonces)
+	require.Equal(t, nonceWindowSize-1, serverChannel.recvNonceHeap.Len(), "window should be enforced")
 	serverChannel.nonceMu.Unlock()
-
-	require.Equal(t, 0, prunedCount, "old nonces should be pruned")
 }
 
 // TestCounterMonotonicity verifies that the send counter is monotonically increasing.
@@ -247,7 +241,7 @@ func TestConcurrentSendReceive(t *testing.T) {
 
 	// Verify all nonces were unique
 	serverChannel.nonceMu.Lock()
-	nonceCount := len(serverChannel.recvNonces)
+	nonceCount := serverChannel.recvNonceHeap.Len()
 	serverChannel.nonceMu.Unlock()
 
 	require.Equal(t, concurrency, nonceCount, "all nonces should be unique")
@@ -393,7 +387,7 @@ func TestSensitiveDataClearing(t *testing.T) {
 	}
 
 	// Nonce cache should be cleared
-	require.Nil(t, channel.recvNonces)
+	require.Equal(t, 0, channel.recvNonceHeap.Len())
 }
 
 // TestConnectionInterface verifies basic Connection interface contract.

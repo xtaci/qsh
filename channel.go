@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/heap"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,8 +20,6 @@ import (
 const (
 	// nonceSize defines the length of nonces for replay protection
 	nonceSize = 16
-	// maxTimestampSkew defines the maximum acceptable clock difference in seconds
-	maxTimestampSkew = 300 // 5 minutes
 	// nonceWindowSize defines how many recent nonces to track for replay detection
 	nonceWindowSize = 10000
 )
@@ -61,9 +60,61 @@ type encryptedChannel struct {
 	closeMu sync.Mutex
 
 	// Replay protection
-	sendCounter uint64
-	recvNonces  map[string]int64 // nonce -> timestamp
-	nonceMu     sync.Mutex
+	sendCounter   uint64
+	recvNonceHeap nonceMinHeap
+	nonceMu       sync.Mutex
+}
+
+type nonceEntry struct {
+	hash      uint64
+	timestamp int64
+}
+
+type nonceMinHeap struct {
+	entries      []nonceEntry
+	recvNonceSet map[uint64]struct{}
+}
+
+func (h nonceMinHeap) Len() int { return len(h.entries) }
+func (h nonceMinHeap) Less(i, j int) bool {
+	return h.entries[i].timestamp < h.entries[j].timestamp
+}
+func (h nonceMinHeap) Swap(i, j int) { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
+
+func (h *nonceMinHeap) ensureSet() {
+	if h.recvNonceSet == nil {
+		h.recvNonceSet = make(map[uint64]struct{})
+	}
+}
+
+// Hash returns whether the provided nonce hash is already tracked.
+func (h *nonceMinHeap) Hash(nonce uint64) bool {
+	h.ensureSet()
+	_, exists := h.recvNonceSet[nonce]
+	return exists
+}
+
+func (h *nonceMinHeap) Push(x interface{}) {
+	entry := x.(nonceEntry)
+	h.ensureSet()
+	h.entries = append(h.entries, entry)
+	h.recvNonceSet[entry.hash] = struct{}{}
+}
+
+func (h *nonceMinHeap) Pop() interface{} {
+	old := h.entries
+	n := len(old)
+	item := old[n-1]
+	h.entries = old[:n-1]
+	if h.recvNonceSet != nil {
+		delete(h.recvNonceSet, item.hash)
+	}
+	return item
+}
+
+func (h *nonceMinHeap) Reset() {
+	h.entries = nil
+	h.recvNonceSet = nil
 }
 
 // Ensure encryptedChannel implements Transport interface
@@ -73,13 +124,21 @@ var _ Transport = (*encryptedChannel)(nil)
 // and MAC keys for each direction.
 func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) *encryptedChannel {
 	return &encryptedChannel{
-		conn:       conn,
-		sendPad:    sendPad,
-		recvPad:    recvPad,
-		sendMac:    append([]byte(nil), sendMacKey...),
-		recvMac:    append([]byte(nil), recvMacKey...),
-		recvNonces: make(map[string]int64),
+		conn:    conn,
+		sendPad: sendPad,
+		recvPad: recvPad,
+		sendMac: append([]byte(nil), sendMacKey...),
+		recvMac: append([]byte(nil), recvMacKey...),
+		recvNonceHeap: nonceMinHeap{
+			entries:      make([]nonceEntry, 0),
+			recvNonceSet: make(map[uint64]struct{}),
+		},
 	}
+}
+
+func hashNonceValue(nonce []byte) uint64 {
+	sum := sha256.Sum256(nonce)
+	return binary.BigEndian.Uint64(sum[:8])
 }
 
 // NewTransport creates a new Transport from a net.Conn with the given encryption parameters.
@@ -152,32 +211,25 @@ func (c *encryptedChannel) Receive() (*protocol.PlainPayload, error) {
 		return nil, fmt.Errorf("unexpected non-secure message received")
 	}
 
-	// Validate timestamp to prevent replay attacks with old messages
-	now := time.Now().Unix()
+	// Ensure timestamp is present so it stays bound to MAC
 	if env.SecureData.Timestamp == 0 {
 		return nil, fmt.Errorf("missing timestamp in secure data")
-	}
-	timeDiff := now - env.SecureData.Timestamp
-	if timeDiff < -maxTimestampSkew || timeDiff > maxTimestampSkew {
-		return nil, fmt.Errorf("timestamp out of acceptable range (diff: %d seconds)", timeDiff)
 	}
 
 	// Check nonce for replay detection
 	if len(env.SecureData.Nonce) != nonceSize {
 		return nil, fmt.Errorf("invalid nonce size: %d", len(env.SecureData.Nonce))
 	}
-	nonceKey := string(env.SecureData.Nonce)
+	nonceHash := hashNonceValue(env.SecureData.Nonce)
 	c.nonceMu.Lock()
-	if _, exists := c.recvNonces[nonceKey]; exists {
+	if c.recvNonceHeap.Hash(nonceHash) {
 		c.nonceMu.Unlock()
 		return nil, fmt.Errorf("replay attack detected: duplicate nonce")
 	}
 	// Store nonce with timestamp
-	c.recvNonces[nonceKey] = env.SecureData.Timestamp
-	// Clean up old nonces if window is too large
-	if len(c.recvNonces) > nonceWindowSize {
-		c.pruneOldNonces(now)
-	}
+	heap.Push(&c.recvNonceHeap, nonceEntry{hash: nonceHash, timestamp: env.SecureData.Timestamp})
+	// Clean up old nonces if the window is exceeded
+	c.pruneOldNonces()
 	c.nonceMu.Unlock()
 
 	plain := c.decryptBuffer(env.SecureData.Ciphertext)
@@ -219,14 +271,11 @@ func (c *encryptedChannel) computePayloadHMAC(key, data, nonce []byte, timestamp
 	return h.Sum(nil)
 }
 
-// pruneOldNonces removes nonces older than the acceptable time window.
+// pruneOldNonces enforces the nonce window size by discarding the oldest entries.
 // Must be called with nonceMu held.
-func (c *encryptedChannel) pruneOldNonces(now int64) {
-	cutoff := now - maxTimestampSkew
-	for nonce, ts := range c.recvNonces {
-		if ts < cutoff {
-			delete(c.recvNonces, nonce)
-		}
+func (c *encryptedChannel) pruneOldNonces() {
+	for c.recvNonceHeap.Len() >= nonceWindowSize {
+		heap.Pop(&c.recvNonceHeap)
 	}
 }
 
@@ -247,7 +296,7 @@ func (c *encryptedChannel) Close() error {
 
 	// Clear nonce cache
 	c.nonceMu.Lock()
-	c.recvNonces = nil
+	c.recvNonceHeap.Reset()
 	c.nonceMu.Unlock()
 
 	return c.conn.Close()
