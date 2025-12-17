@@ -43,14 +43,6 @@ func runServerCommand(c *cli.Context) error {
 	return runServer(addr, store, loader, configPath != "")
 }
 
-// serverSession encapsulates per-client state derived during the handshake.
-type serverSession struct {
-	Conn     net.Conn
-	Channel  *encryptedChannel
-	ClientID string
-	Mode     protocol.ClientMode
-}
-
 // runServer accepts TCP clients and performs the secure handshake per session.
 func runServer(addr string, store *clientRegistryStore, loader registryLoader, watchReload bool) error {
 	ln, err := net.Listen("tcp", addr)
@@ -58,6 +50,8 @@ func runServer(addr string, store *clientRegistryStore, loader registryLoader, w
 		return err
 	}
 	log.Printf("listening on %s", addr)
+
+	// Start registry reload watcher if enabled.
 	if watchReload && loader != nil {
 		go watchRegistryReload(store, loader)
 	}
@@ -90,6 +84,14 @@ func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
 	default:
 		return session.handleInteractiveShell()
 	}
+}
+
+// serverSession encapsulates per-client state derived during the handshake.
+type serverSession struct {
+	Conn     net.Conn
+	Channel  *encryptedChannel
+	ClientID string
+	Mode     protocol.ClientMode
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.

@@ -88,12 +88,6 @@ func isIdentityError(err error) bool {
 		strings.Contains(msg, "decrypt")
 }
 
-// clientSession bundles the encryption primitives established during the client handshake.
-type clientSession struct {
-	Conn    net.Conn
-	Channel *encryptedChannel
-}
-
 // runClient dials the server, completes the handshake, and attaches local TTY IO.
 func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	// Connect to server
@@ -135,6 +129,12 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	err = <-errCh
 	stop()
 	return err
+}
+
+// clientSession bundles the encryption primitives established during the client handshake.
+type clientSession struct {
+	Conn    net.Conn
+	Channel *encryptedChannel
 }
 
 // performClientHandshake mirrors the server handshake and prepares stream pads.
