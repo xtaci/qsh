@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"time"
 
@@ -146,12 +145,6 @@ func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutati
 		recvMacKey: append([]byte(nil), recvMacKey...),
 		nonceHeap:  newNonceMinHeap(),
 	}
-}
-
-// NewTransport creates a new Transport from a net.Conn with the given encryption parameters.
-// This is the primary constructor for production use.
-func NewTransport(conn net.Conn, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) Transport {
-	return newEncryptedChannel(conn, sendPad, recvPad, sendMacKey, recvMacKey)
 }
 
 // Send marshals a PlainPayload, encrypts it, and writes a SecureData envelope.
