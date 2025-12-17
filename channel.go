@@ -65,11 +65,18 @@ type encryptedChannel struct {
 	nonceMu       sync.Mutex
 }
 
+// nonceEntry represents a tracked nonce with its hash and timestamp.
 type nonceEntry struct {
 	hash      uint64
 	timestamp int64
 }
 
+func hashNonceValue(nonce []byte) uint64 {
+	sum := sha256.Sum256(nonce)
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
+// nonceMinHeap implements a min-heap for nonce entries based on timestamp,
 type nonceMinHeap struct {
 	entries      []nonceEntry
 	recvNonceSet map[uint64]struct{}
@@ -134,11 +141,6 @@ func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutati
 			recvNonceSet: make(map[uint64]struct{}),
 		},
 	}
-}
-
-func hashNonceValue(nonce []byte) uint64 {
-	sum := sha256.Sum256(nonce)
-	return binary.BigEndian.Uint64(sum[:8])
 }
 
 // NewTransport creates a new Transport from a net.Conn with the given encryption parameters.
