@@ -198,7 +198,7 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 	defer file.Close()
 	var offset uint64
 	for {
-		payload, err := s.Channel.Receive()
+		payload, err := s.Channel.Recv()
 		if err != nil {
 			return err
 		}
@@ -240,7 +240,7 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 
 func (s *clientSession) awaitFileResult() (*protocol.FileTransferResult, error) {
 	for {
-		payload, err := s.Channel.Receive()
+		payload, err := s.Channel.Recv()
 		if err != nil {
 			return nil, err
 		}
@@ -289,7 +289,7 @@ func parseRemoteTarget(arg string) (remoteTarget, bool, error) {
 
 // handleFileTransferSession orchestrates upload/download flows for copy mode clients.
 func (s *serverSession) handleFileTransferSession() error {
-	payload, err := s.Channel.Receive()
+	payload, err := s.Channel.Recv()
 	if err != nil {
 		return err
 	}
@@ -330,7 +330,7 @@ func (s *serverSession) handleUploadTransfer(req *protocol.FileTransferRequest) 
 	}
 	var written uint64
 	for {
-		payload, err := s.Channel.Receive()
+		payload, err := s.Channel.Recv()
 		if err != nil {
 			_ = s.sendCopyResult(false, err.Error(), written, true, uint32(perm))
 			return err

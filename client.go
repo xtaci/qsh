@@ -248,7 +248,7 @@ func (s *clientSession) forwardStdIn() error {
 // readServerOutput decrypts server payloads and writes them to stdout.
 func (s *clientSession) readServerOutput() error {
 	for {
-		payload, err := s.Channel.Receive()
+		payload, err := s.Channel.Recv()
 		if err != nil {
 			return err
 		}

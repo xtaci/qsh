@@ -87,7 +87,7 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	const c2sMsg = "ping from client"
 	c2sErr := make(chan error, 1)
 	go func() {
-		payload, err := srv.session.Channel.Receive()
+		payload, err := srv.session.Channel.Recv()
 		if err != nil {
 			c2sErr <- err
 			return
@@ -104,7 +104,7 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	const s2cMsg = "pong from server"
 	s2cErr := make(chan error, 1)
 	go func() {
-		payload, err := clientSession.Channel.Receive()
+		payload, err := clientSession.Channel.Recv()
 		if err != nil {
 			s2cErr <- err
 			return
@@ -173,7 +173,7 @@ func TestFileDownloadTransfer(t *testing.T) {
 	require.Equal(t, uint64(len(content)), start.Size)
 	var received bytes.Buffer
 	for {
-		payload, err := session.client.Channel.Receive()
+		payload, err := session.client.Channel.Recv()
 		require.NoError(t, err)
 		if payload.FileChunk == nil {
 			t.Fatalf("expected file chunk, got %+v", payload)
@@ -232,7 +232,7 @@ func setupCopySession(t *testing.T) copySession {
 
 func expectFileResult(t *testing.T, ch *encryptedChannel) *protocol.FileTransferResult {
 	t.Helper()
-	payload, err := ch.Receive()
+	payload, err := ch.Recv()
 	require.NoError(t, err)
 	if payload.FileResult == nil {
 		t.Fatalf("expected file result, got %+v", payload)

@@ -33,7 +33,7 @@ type Transport interface {
 
 	// Receive blocks until the next PlainPayload is available, decrypts it,
 	// and validates authenticity before returning.
-	Receive() (*protocol.PlainPayload, error)
+	Recv() (*protocol.PlainPayload, error)
 
 	// Close releases all resources and closes the underlying connection.
 	Close() error
@@ -195,7 +195,7 @@ func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
 
 // Receive blocks for the next SecureData envelope, decrypts it, and returns the
 // embedded PlainPayload after verifying its MAC and checking for replay attacks.
-func (c *encryptedChannel) Receive() (*protocol.PlainPayload, error) {
+func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 	c.closeMu.Lock()
 	if c.closed {
 		c.closeMu.Unlock()

@@ -354,7 +354,7 @@ func (s *serverSession) forwardPTYToClient(ptmx *os.File) error {
 // forwardClientToPTY feeds decrypted client data back into the PTY.
 func (s *serverSession) forwardClientToPTY(ptmx *os.File) error {
 	for {
-		payload, err := s.Channel.Receive()
+		payload, err := s.Channel.Recv()
 		if err != nil {
 			return err
 		}

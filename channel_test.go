@@ -79,7 +79,7 @@ func TestReplayProtectionDuplicateNonce(t *testing.T) {
 	}()
 
 	// First receive should succeed
-	received, err := serverChannel.Receive()
+	received, err := serverChannel.Recv()
 	require.NoError(t, err)
 	require.Equal(t, "test message", string(received.Stream))
 	require.NoError(t, <-errCh)
@@ -92,7 +92,7 @@ func TestReplayProtectionDuplicateNonce(t *testing.T) {
 	}()
 
 	// Second receive with different nonce should succeed
-	received2, err := serverChannel.Receive()
+	received2, err := serverChannel.Recv()
 	require.NoError(t, err)
 	require.Equal(t, "test message", string(received2.Stream))
 	require.NoError(t, <-errCh)
@@ -121,7 +121,7 @@ func TestTimestampValidation(t *testing.T) {
 	}()
 
 	// Should receive successfully with valid timestamp
-	received, err := serverChannel.Receive()
+	received, err := serverChannel.Recv()
 	require.NoError(t, err)
 	require.Equal(t, "valid timestamp", string(received.Stream))
 	require.NoError(t, <-errCh)
@@ -155,7 +155,7 @@ func TestNoncePruning(t *testing.T) {
 		errCh <- clientChannel.Send(testPayload)
 	}()
 
-	_, err := serverChannel.Receive()
+	_, err := serverChannel.Recv()
 	require.NoError(t, err)
 	require.NoError(t, <-errCh)
 
@@ -188,7 +188,7 @@ func TestCounterMonotonicity(t *testing.T) {
 			errCh <- clientChannel.Send(testPayload)
 		}()
 
-		_, err := serverChannel.Receive()
+		_, err := serverChannel.Recv()
 		require.NoError(t, err)
 		require.NoError(t, <-errCh)
 	}
@@ -217,7 +217,7 @@ func TestConcurrentSendReceive(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < concurrency; i++ {
-			_, err := serverChannel.Receive()
+			_, err := serverChannel.Recv()
 			require.NoError(t, err)
 		}
 	}()
@@ -313,7 +313,7 @@ func TestTransportWithMockConnection(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test receive on server
-	received, err := serverTransport.Receive()
+	received, err := serverTransport.Recv()
 	require.NoError(t, err)
 	require.Equal(t, "mock test message", string(received.Stream))
 }
@@ -343,7 +343,7 @@ func TestTransportClose(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "closed")
 
-	_, err = transport.Receive()
+	_, err = transport.Recv()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "closed")
 }
@@ -456,7 +456,7 @@ func BenchmarkTransportSendReceive(b *testing.B) {
 		if err := client.Send(payload); err != nil {
 			b.Fatal(err)
 		}
-		if _, err := server.Receive(); err != nil {
+		if _, err := server.Recv(); err != nil {
 			b.Fatal(err)
 		}
 	}
