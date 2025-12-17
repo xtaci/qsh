@@ -8,7 +8,7 @@ The client connects to the server using hppk for authentication and establishes 
 
 The server supports multiple concurrent client connections, allowing multiple users to access the server simultaneously.
 
-client.go, server.go, copy.go handles client, server and copy commands respectively.
+cmd\_client.go, cmd\_server.go, cmd\_copy.go handles client, server and copy commands respectively.
 
 session.go implements the terminal session handling, including secure channel establishment, reading/writing from/to terminal, handling terminal resize events etc.
 
