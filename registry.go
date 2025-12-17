@@ -61,6 +61,8 @@ func parseClientEntries(values []string) ([]clientEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get executable path: %w", err)
 	}
+
+	// Resolve relative paths against the executable's directory
 	execDir := filepath.Dir(executable)
 
 	return parseClientEntriesWithBaseDir(values, execDir)
@@ -75,11 +77,14 @@ func parseClientEntriesWithBaseDir(values []string, baseDir string) ([]clientEnt
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid client entry %q (expected id=/path/to/key)", value)
 		}
+
+		// Trim spaces around id and path
 		id := strings.TrimSpace(parts[0])
 		path := strings.TrimSpace(parts[1])
 		if id == "" || path == "" {
 			return nil, fmt.Errorf("invalid client entry %q", value)
 		}
+
 		// Convert relative paths to absolute paths relative to base directory
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(baseDir, path)
@@ -107,6 +112,8 @@ func watchRegistryReload(store *clientRegistryStore, loader registryLoader) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGUSR1)
 	defer signal.Stop(sigCh)
+
+	// Listen for reload signals
 	for range sigCh {
 		log.Printf("received SIGUSR1, reloading client registry")
 		registry, err := loader()

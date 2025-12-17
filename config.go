@@ -23,6 +23,7 @@ type clientConfigEntry struct {
 
 // loadClientEntriesFromConfig reads and parses the client configuration file
 func loadClientEntriesFromConfig(path string) ([]clientEntry, error) {
+	// Read the config file
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -34,7 +35,11 @@ func loadClientEntriesFromConfig(path string) ([]clientEntry, error) {
 	if len(cfg.Clients) == 0 {
 		return nil, fmt.Errorf("config %s does not list any clients", path)
 	}
+
+	// Resolve paths relative to the config file directory
 	configDir := filepath.Dir(path)
+
+	// Convert config entries to clientEntry slice
 	entries := make([]clientEntry, 0, len(cfg.Clients))
 	for _, client := range cfg.Clients {
 		id := strings.TrimSpace(client.ID)
