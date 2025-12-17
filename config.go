@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -33,12 +34,17 @@ func loadClientEntriesFromConfig(path string) ([]clientEntry, error) {
 	if len(cfg.Clients) == 0 {
 		return nil, fmt.Errorf("config %s does not list any clients", path)
 	}
+	configDir := filepath.Dir(path)
 	entries := make([]clientEntry, 0, len(cfg.Clients))
 	for _, client := range cfg.Clients {
 		id := strings.TrimSpace(client.ID)
 		keyPath := strings.TrimSpace(client.PublicKey)
 		if id == "" || keyPath == "" {
 			return nil, fmt.Errorf("config %s contains empty id or public_key", path)
+		}
+		// Convert relative paths to absolute paths relative to config file directory
+		if !filepath.IsAbs(keyPath) {
+			keyPath = filepath.Join(configDir, keyPath)
 		}
 		entries = append(entries, clientEntry{id: id, path: keyPath})
 	}
