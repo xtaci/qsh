@@ -144,7 +144,7 @@ func TestNoncePruning(t *testing.T) {
 	// Preload nonce cache to its window size limit
 	serverChannel.nonceMu.Lock()
 	for i := 0; i < nonceWindowSize; i++ {
-		heap.Push(&serverChannel.recvNonceHeap, nonceEntry{hash: uint64(i + 1), timestamp: int64(i)})
+		heap.Push(serverChannel.nonceHeap, nonceEntry{hash: uint64(i + 1), timestamp: int64(i)})
 	}
 	serverChannel.nonceMu.Unlock()
 
@@ -160,7 +160,7 @@ func TestNoncePruning(t *testing.T) {
 	require.NoError(t, <-errCh)
 
 	serverChannel.nonceMu.Lock()
-	require.Equal(t, nonceWindowSize-1, serverChannel.recvNonceHeap.Len(), "window should be enforced")
+	require.Equal(t, nonceWindowSize-1, serverChannel.nonceHeap.Len(), "window should be enforced")
 	serverChannel.nonceMu.Unlock()
 }
 
@@ -241,7 +241,7 @@ func TestConcurrentSendReceive(t *testing.T) {
 
 	// Verify all nonces were unique
 	serverChannel.nonceMu.Lock()
-	nonceCount := serverChannel.recvNonceHeap.Len()
+	nonceCount := serverChannel.nonceHeap.Len()
 	serverChannel.nonceMu.Unlock()
 
 	require.Equal(t, concurrency, nonceCount, "all nonces should be unique")
@@ -387,7 +387,7 @@ func TestSensitiveDataClearing(t *testing.T) {
 	}
 
 	// Nonce cache should be cleared
-	require.Equal(t, 0, channel.recvNonceHeap.Len())
+	require.Equal(t, 0, channel.nonceHeap.Len())
 }
 
 // TestConnectionInterface verifies basic Connection interface contract.

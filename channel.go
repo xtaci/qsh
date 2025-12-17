@@ -41,28 +41,37 @@ type Connection interface {
 // serialized Send operations and HMAC verification for Receive operations.
 // It implements the Transport interface.
 type encryptedChannel struct {
-	conn       Connection
-	sendPad    *qpp.QuantumPermutationPad
-	recvPad    *qpp.QuantumPermutationPad
+	conn Connection
+
+	// QPP pads for each direction
+	sendPad *qpp.QuantumPermutationPad
+	recvPad *qpp.QuantumPermutationPad
+
+	// MAC keys for each direction
 	sendMacKey []byte
 	recvMacKey []byte
-	sendMu     sync.Mutex
-	recvMu     sync.Mutex
-	closed     bool
-	closeMu    sync.Mutex
+
+	// Synchronization for sending and receiving
+	sendMu sync.Mutex
+	recvMu sync.Mutex
+
+	// Closed state
+	closed  bool
+	closeMu sync.Mutex
 
 	// Replay protection
-	sendCounter   uint64
-	recvNonceHeap nonceMinHeap
-	nonceMu       sync.Mutex
+	sendCounter uint64
+	nonceHeap   *nonceMinHeap
+	nonceMu     sync.Mutex
 }
 
 // nonceEntry represents a tracked nonce with its hash and timestamp.
 type nonceEntry struct {
-	hash      uint64
+	hash      uint64 // compact nonce to reduce memory usage
 	timestamp int64
 }
 
+// hashNonceValue compact a nonce for memory-efficient storage.
 func hashNonceValue(nonce []byte) uint64 {
 	sum := sha256.Sum256(nonce)
 	return binary.BigEndian.Uint64(sum[:8])
@@ -70,8 +79,15 @@ func hashNonceValue(nonce []byte) uint64 {
 
 // nonceMinHeap implements a min-heap for nonce entries based on timestamp,
 type nonceMinHeap struct {
-	entries      []nonceEntry
-	recvNonceSet map[uint64]struct{}
+	entries     []nonceEntry // heap of nonce entries
+	nonceHashes map[uint64]struct{}
+}
+
+func newNonceMinHeap() *nonceMinHeap {
+	return &nonceMinHeap{
+		entries:     make([]nonceEntry, 0),
+		nonceHashes: make(map[uint64]struct{}),
+	}
 }
 
 func (h nonceMinHeap) Len() int { return len(h.entries) }
@@ -80,24 +96,24 @@ func (h nonceMinHeap) Less(i, j int) bool {
 }
 func (h nonceMinHeap) Swap(i, j int) { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
 
-func (h *nonceMinHeap) ensureSet() {
-	if h.recvNonceSet == nil {
-		h.recvNonceSet = make(map[uint64]struct{})
+func (h *nonceMinHeap) ensureNonceMap() {
+	if h.nonceHashes == nil {
+		h.nonceHashes = make(map[uint64]struct{})
 	}
 }
 
 // Hash returns whether the provided nonce hash is already tracked.
 func (h *nonceMinHeap) Hash(nonce uint64) bool {
-	h.ensureSet()
-	_, exists := h.recvNonceSet[nonce]
+	h.ensureNonceMap()
+	_, exists := h.nonceHashes[nonce]
 	return exists
 }
 
 func (h *nonceMinHeap) Push(x interface{}) {
 	entry := x.(nonceEntry)
-	h.ensureSet()
+	h.ensureNonceMap()
 	h.entries = append(h.entries, entry)
-	h.recvNonceSet[entry.hash] = struct{}{}
+	h.nonceHashes[entry.hash] = struct{}{}
 }
 
 func (h *nonceMinHeap) Pop() interface{} {
@@ -105,15 +121,15 @@ func (h *nonceMinHeap) Pop() interface{} {
 	n := len(old)
 	item := old[n-1]
 	h.entries = old[:n-1]
-	if h.recvNonceSet != nil {
-		delete(h.recvNonceSet, item.hash)
+	if h.nonceHashes != nil {
+		delete(h.nonceHashes, item.hash)
 	}
 	return item
 }
 
 func (h *nonceMinHeap) Reset() {
 	h.entries = nil
-	h.recvNonceSet = nil
+	h.nonceHashes = nil
 }
 
 // Ensure encryptedChannel implements Transport interface
@@ -128,10 +144,7 @@ func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutati
 		recvPad:    recvPad,
 		sendMacKey: append([]byte(nil), sendMacKey...),
 		recvMacKey: append([]byte(nil), recvMacKey...),
-		recvNonceHeap: nonceMinHeap{
-			entries:      make([]nonceEntry, 0),
-			recvNonceSet: make(map[uint64]struct{}),
-		},
+		nonceHeap:  newNonceMinHeap(),
 	}
 }
 
@@ -216,12 +229,12 @@ func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 	}
 	nonceHash := hashNonceValue(env.SecureData.Nonce)
 	c.nonceMu.Lock()
-	if c.recvNonceHeap.Hash(nonceHash) {
+	if c.nonceHeap.Hash(nonceHash) {
 		c.nonceMu.Unlock()
 		return nil, fmt.Errorf("replay attack detected: duplicate nonce")
 	}
 	// Store nonce with timestamp
-	heap.Push(&c.recvNonceHeap, nonceEntry{hash: nonceHash, timestamp: env.SecureData.Timestamp})
+	heap.Push(c.nonceHeap, nonceEntry{hash: nonceHash, timestamp: env.SecureData.Timestamp})
 	// Clean up old nonces if the window is exceeded
 	c.pruneOldNonces()
 	c.nonceMu.Unlock()
@@ -268,8 +281,8 @@ func (c *encryptedChannel) computePayloadHMAC(key, data, nonce []byte, timestamp
 // pruneOldNonces enforces the nonce window size by discarding the oldest entries.
 // Must be called with nonceMu held.
 func (c *encryptedChannel) pruneOldNonces() {
-	for c.recvNonceHeap.Len() >= nonceWindowSize {
-		heap.Pop(&c.recvNonceHeap)
+	for c.nonceHeap.Len() >= nonceWindowSize {
+		heap.Pop(c.nonceHeap)
 	}
 }
 
@@ -290,7 +303,7 @@ func (c *encryptedChannel) Close() error {
 
 	// Clear nonce cache
 	c.nonceMu.Lock()
-	c.recvNonceHeap.Reset()
+	c.nonceHeap.Reset()
 	c.nonceMu.Unlock()
 
 	return c.conn.Close()
