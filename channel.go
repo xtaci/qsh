@@ -41,23 +41,22 @@ type Transport interface {
 
 // Connection abstracts the underlying network connection for testing and flexibility.
 type Connection interface {
-	io.ReadWriter
-	io.Closer
+	io.ReadWriteCloser
 }
 
 // encryptedChannel wraps the bidirectional authenticated stream, providing
 // serialized Send operations and HMAC verification for Receive operations.
 // It implements the Transport interface.
 type encryptedChannel struct {
-	conn    Connection
-	sendPad *qpp.QuantumPermutationPad
-	recvPad *qpp.QuantumPermutationPad
-	sendMac []byte
-	recvMac []byte
-	sendMu  sync.Mutex
-	recvMu  sync.Mutex
-	closed  bool
-	closeMu sync.Mutex
+	conn       Connection
+	sendPad    *qpp.QuantumPermutationPad
+	recvPad    *qpp.QuantumPermutationPad
+	sendMacKey []byte
+	recvMacKey []byte
+	sendMu     sync.Mutex
+	recvMu     sync.Mutex
+	closed     bool
+	closeMu    sync.Mutex
 
 	// Replay protection
 	sendCounter   uint64
@@ -131,11 +130,11 @@ var _ Transport = (*encryptedChannel)(nil)
 // and MAC keys for each direction.
 func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) *encryptedChannel {
 	return &encryptedChannel{
-		conn:    conn,
-		sendPad: sendPad,
-		recvPad: recvPad,
-		sendMac: append([]byte(nil), sendMacKey...),
-		recvMac: append([]byte(nil), recvMacKey...),
+		conn:       conn,
+		sendPad:    sendPad,
+		recvPad:    recvPad,
+		sendMacKey: append([]byte(nil), sendMacKey...),
+		recvMacKey: append([]byte(nil), recvMacKey...),
 		recvNonceHeap: nonceMinHeap{
 			entries:      make([]nonceEntry, 0),
 			recvNonceSet: make(map[uint64]struct{}),
@@ -183,7 +182,7 @@ func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
 	timestamp := time.Now().Unix()
 
 	cipher := c.encryptBuffer(plain)
-	mac := c.computePayloadHMAC(c.sendMac, plain, nonce, timestamp)
+	mac := c.computePayloadHMAC(c.sendMacKey, plain, nonce, timestamp)
 	env := &protocol.Envelope{SecureData: &protocol.SecureData{
 		Ciphertext: cipher,
 		Mac:        mac,
@@ -235,7 +234,7 @@ func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 	c.nonceMu.Unlock()
 
 	plain := c.decryptBuffer(env.SecureData.Ciphertext)
-	expected := c.computePayloadHMAC(c.recvMac, plain, env.SecureData.Nonce, env.SecureData.Timestamp)
+	expected := c.computePayloadHMAC(c.recvMacKey, plain, env.SecureData.Nonce, env.SecureData.Timestamp)
 	if !hmac.Equal(expected, env.SecureData.Mac) {
 		return nil, fmt.Errorf("payload hmac mismatch")
 	}
@@ -293,8 +292,8 @@ func (c *encryptedChannel) Close() error {
 	c.closed = true
 
 	// Clear sensitive data
-	clear(c.sendMac)
-	clear(c.recvMac)
+	clear(c.sendMacKey)
+	clear(c.recvMacKey)
 
 	// Clear nonce cache
 	c.nonceMu.Lock()

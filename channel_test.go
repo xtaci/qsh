@@ -361,12 +361,12 @@ func TestSensitiveDataClearing(t *testing.T) {
 	channel := newEncryptedChannel(mockConn, sendPad, recvPad, sendMacKey, recvMacKey)
 
 	// Verify keys are copied (not just referenced)
-	require.NotSame(t, sendMacKey, channel.sendMac)
-	require.NotSame(t, recvMacKey, channel.recvMac)
+	require.NotSame(t, sendMacKey, channel.sendMacKey)
+	require.NotSame(t, recvMacKey, channel.recvMacKey)
 
 	// Keys should be non-zero before close
 	hasNonZero := false
-	for _, b := range channel.sendMac {
+	for _, b := range channel.sendMacKey {
 		if b != 0 {
 			hasNonZero = true
 			break
@@ -379,10 +379,10 @@ func TestSensitiveDataClearing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Keys should be zeroed after close
-	for _, b := range channel.sendMac {
+	for _, b := range channel.sendMacKey {
 		require.Equal(t, byte(0), b, "sendMac should be zeroed after close")
 	}
-	for _, b := range channel.recvMac {
+	for _, b := range channel.recvMacKey {
 		require.Equal(t, byte(0), b, "recvMac should be zeroed after close")
 	}
 
