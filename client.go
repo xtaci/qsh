@@ -204,21 +204,21 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	}
 
 	// Derive directional seeds and create QPP instances
-	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-c2s")
+	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, seedLabelClientToServer)
 	if err != nil {
 		return nil, err
 	}
-	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-s2c")
+	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, seedLabelServerToClient)
 	if err != nil {
 		return nil, err
 	}
 
 	// Derive directional MAC keys
-	c2sMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	c2sMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, macLabelClientToServer)
 	if err != nil {
 		return nil, err
 	}
-	s2cMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	s2cMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, macLabelServerToClient)
 	if err != nil {
 		return nil, err
 	}

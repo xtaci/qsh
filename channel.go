@@ -17,13 +17,6 @@ import (
 	"github.com/xtaci/qsh/protocol"
 )
 
-const (
-	// nonceSize defines the length of nonces for replay protection
-	nonceSize = 16
-	// nonceWindowSize defines how many recent nonces to track for replay detection
-	nonceWindowSize = 10000
-)
-
 // Transport defines the interface for secure bidirectional communication.
 // This abstraction allows different implementations (TCP, WebSocket, QUIC, mock)
 // without changing the core encryption/authentication logic.

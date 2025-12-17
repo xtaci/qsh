@@ -282,19 +282,19 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 	}
 
 	// 7. Prepare QPP pads for symmetric encryption
-	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-c2s")
+	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, seedLabelClientToServer)
 	if err != nil {
 		return nil, err
 	}
-	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, "qsh-s2c")
+	s2cSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, seedLabelServerToClient)
 	if err != nil {
 		return nil, err
 	}
-	c2sMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-c2s-mac")
+	c2sMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, macLabelClientToServer)
 	if err != nil {
 		return nil, err
 	}
-	s2cMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, "qsh-s2c-mac")
+	s2cMac, err := qcrypto.DeriveDirectionalMAC(masterSeed, macLabelServerToClient)
 	if err != nil {
 		return nil, err
 	}
