@@ -86,11 +86,14 @@ Development Notes
 - Requires Go 1.25.4+ (see `go.mod`).
 - Run tests with `go test ./...` to exercise the protobuf auth flow.
 - Key implementation files:
-  - `main.go` – CLI parsing, server/client orchestration, and PTY bridge.
+  - `main.go` – CLI entry point and command definitions.
+  - `cmd_client.go`, `cmd_server.go`, `cmd_copy.go` – command handlers for client, server, and copy operations.
+  - `session.go` – handshake protocol implementation for client and server.
+  - `tty.go` – PTY management and terminal I/O forwarding.
+  - `transfer.go` – file upload/download implementation.
+  - `channel.go` – encrypted communication channel with replay protection.
   - `protocol/` – protobuf definitions plus length-prefixed codec helpers.
-	- `channel.go` – streaming layer that encrypts/decrypts protobuf payloads with QPP pads.
-	- `crypto.go` – key generation, encrypted key storage, and HPPK private key handling.
-	- `signature.go` – marshalling helpers that convert HPPK signatures to/from protobufs.
+  - `crypto/` – key generation, encrypted key storage, HPPK signatures, and HKDF derivation.
 
 License
 -------
