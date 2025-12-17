@@ -47,6 +47,7 @@ func runCopyCommand(c *cli.Context) error {
 		return exitWithExample("copy command requires exactly one remote endpoint", exampleCopy)
 	}
 
+	// determine direction and prepare parameters
 	var remote remoteTarget
 	var direction protocol.FileDirection
 	var localPath string
@@ -59,15 +60,19 @@ func runCopyCommand(c *cli.Context) error {
 		direction = protocol.FileDirection_FILE_DIRECTION_UPLOAD
 		localPath = srcArg
 	}
+
+	// validate remote parameters
 	if remote.clientID == "" {
 		remote.clientID = strings.TrimSpace(c.String("id"))
-	}
-	if remote.clientID == "" {
-		return exitWithExample("copy command requires a client identifier", exampleCopy)
+		if remote.clientID == "" {
+			return exitWithExample("copy command requires a client identifier", exampleCopy)
+		}
 	}
 	if remote.host == "" {
 		return exitWithExample("copy command requires a remote host", exampleCopy)
 	}
+
+	// load private key
 	priv, err := qcrypto.LoadPrivateKey(identity)
 	if err != nil {
 		return err
@@ -84,16 +89,21 @@ func runCopyCommand(c *cli.Context) error {
 	return executeCopySession(addr, priv, remote.clientID, direction, localPath, remote.path)
 }
 
+// executeCopySession establishes a client session and performs the requested file transfer.
 func executeCopySession(addr string, priv *hppk.PrivateKey, clientID string, direction protocol.FileDirection, localPath, remotePath string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+
+	// perform handshake
 	session, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
 	if err != nil {
 		return err
 	}
+
+	// perform file transfer based on direction
 	switch direction {
 	case protocol.FileDirection_FILE_DIRECTION_UPLOAD:
 		return session.uploadFile(localPath, remotePath)
@@ -114,6 +124,8 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 		return fmt.Errorf("%s is a directory", localPath)
 	}
 	perm := uint32(info.Mode().Perm())
+
+	// send upload request
 	req := &protocol.FileTransferRequest{
 		Direction: protocol.FileDirection_FILE_DIRECTION_UPLOAD,
 		Path:      remotePath,
@@ -123,6 +135,8 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 	if err := s.Channel.Send(&protocol.PlainPayload{FileRequest: req}); err != nil {
 		return err
 	}
+
+	// await server readiness
 	ready, err := s.awaitFileResult()
 	if err != nil {
 		return err
@@ -130,12 +144,14 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 	if !ready.Success {
 		return errors.New(ready.Message)
 	}
+
+	// stream file contents
 	file, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, fileCopyBufferSize)
 	var offset uint64
 	for {
 		n, readErr := file.Read(buf)
@@ -156,6 +172,8 @@ func (s *clientSession) uploadFile(localPath, remotePath string) error {
 	if err := s.Channel.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
 		return err
 	}
+
+	// await final result
 	final, err := s.awaitFileResult()
 	if err != nil {
 		return err
@@ -174,9 +192,13 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 	if info, err := os.Stat(localPath); err == nil && info.IsDir() {
 		return fmt.Errorf("%s is a directory", localPath)
 	}
+
+	// send download request
 	if err := s.Channel.Send(&protocol.PlainPayload{FileRequest: &protocol.FileTransferRequest{Direction: protocol.FileDirection_FILE_DIRECTION_DOWNLOAD, Path: remotePath}}); err != nil {
 		return err
 	}
+
+	// await server readiness
 	start, err := s.awaitFileResult()
 	if err != nil {
 		return err
@@ -188,6 +210,8 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 	if perm == 0 {
 		perm = 0o600
 	}
+
+	// prepare local file
 	if err := ensureLocalParent(localPath); err != nil {
 		return err
 	}
@@ -196,6 +220,8 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 		return err
 	}
 	defer file.Close()
+
+	// receive file contents
 	var offset uint64
 	for {
 		payload, err := s.Channel.Recv()
@@ -225,9 +251,13 @@ func (s *clientSession) downloadFile(localPath, remotePath string) error {
 			return nil
 		}
 	}
+
+	// finalize file
 	if err := file.Sync(); err != nil {
 		return err
 	}
+
+	// await final result
 	final, err := s.awaitFileResult()
 	if err != nil {
 		return err
@@ -250,43 +280,6 @@ func (s *clientSession) awaitFileResult() (*protocol.FileTransferResult, error) 
 	}
 }
 
-func ensureLocalParent(path string) error {
-	dir := filepath.Dir(path)
-	if dir == "." {
-		return nil
-	}
-	return os.MkdirAll(dir, 0o755)
-}
-
-func parseRemoteTarget(arg string) (remoteTarget, bool, error) {
-	trimmed := strings.TrimSpace(arg)
-	if trimmed == "" {
-		return remoteTarget{}, false, nil
-	}
-	at := strings.Index(trimmed, "@")
-	if at == -1 {
-		return remoteTarget{}, false, nil
-	}
-	colon := strings.Index(trimmed[at+1:], ":")
-	if colon == -1 {
-		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing path separator ':'", arg)
-	}
-	colon += at + 1
-	clientID := strings.TrimSpace(trimmed[:at])
-	host := strings.TrimSpace(trimmed[at+1 : colon])
-	path := trimmed[colon+1:]
-	if clientID == "" {
-		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing client id", arg)
-	}
-	if host == "" {
-		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing host", arg)
-	}
-	if path == "" {
-		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing path", arg)
-	}
-	return remoteTarget{clientID: clientID, host: host, path: path}, true, nil
-}
-
 // handleFileTransferSession orchestrates upload/download flows for copy mode clients.
 func (s *serverSession) handleFileTransferSession() error {
 	payload, err := s.Channel.Recv()
@@ -298,6 +291,8 @@ func (s *serverSession) handleFileTransferSession() error {
 		_ = s.sendCopyResult(false, "expected file transfer request", 0, true, 0)
 		return errors.New("copy: missing file transfer request")
 	}
+
+	// dispatch based on direction
 	switch req.Direction {
 	case protocol.FileDirection_FILE_DIRECTION_UPLOAD:
 		return s.handleUploadTransfer(req)
@@ -309,7 +304,9 @@ func (s *serverSession) handleFileTransferSession() error {
 	}
 }
 
+// handleUploadTransfer processes an upload request from the client and writes the incoming file data to the server's filesystem.
 func (s *serverSession) handleUploadTransfer(req *protocol.FileTransferRequest) error {
+	// sanitize and prepare destination file
 	path, err := sanitizeCopyPath(req.Path)
 	if err != nil {
 		_ = s.sendCopyResult(false, err.Error(), 0, true, 0)
@@ -325,9 +322,13 @@ func (s *serverSession) handleUploadTransfer(req *protocol.FileTransferRequest) 
 		return err
 	}
 	defer file.Close()
+
+	// signal readiness to receive file data
 	if err := s.sendCopyResult(true, "ready", req.Size, false, uint32(perm)); err != nil {
 		return err
 	}
+
+	// receive file data
 	var written uint64
 	for {
 		payload, err := s.Channel.Recv()
@@ -357,14 +358,20 @@ func (s *serverSession) handleUploadTransfer(req *protocol.FileTransferRequest) 
 			break
 		}
 	}
+
+	// finalize file
 	if err := file.Sync(); err != nil {
 		_ = s.sendCopyResult(false, err.Error(), written, true, uint32(perm))
 		return err
 	}
+
+	// send completion result
 	return s.sendCopyResult(true, "upload complete", written, true, uint32(perm))
 }
 
+// handleDownloadTransfer processes a download request from the client and streams the requested file data back to the client.
 func (s *serverSession) handleDownloadTransfer(req *protocol.FileTransferRequest) error {
+	// sanitize and open source file
 	path, err := sanitizeCopyPath(req.Path)
 	if err != nil {
 		_ = s.sendCopyResult(false, err.Error(), 0, true, 0)
@@ -386,7 +393,9 @@ func (s *serverSession) handleDownloadTransfer(req *protocol.FileTransferRequest
 	if err := s.sendCopyResult(true, "starting download", size, false, perm); err != nil {
 		return err
 	}
-	buf := make([]byte, 32*1024)
+
+	// stream file contents
+	buf := make([]byte, fileCopyBufferSize)
 	var offset uint64
 	for {
 		n, readErr := file.Read(buf)
@@ -405,12 +414,21 @@ func (s *serverSession) handleDownloadTransfer(req *protocol.FileTransferRequest
 			return readErr
 		}
 	}
+
+	// send EOF chunk
 	if err := s.Channel.Send(&protocol.PlainPayload{FileChunk: &protocol.FileTransferChunk{Offset: offset, Eof: true}}); err != nil {
 		return err
 	}
 	return s.sendCopyResult(true, "download complete", offset, true, perm)
 }
 
+// sendCopyResult sends a file transfer result message to the client.
+func (s *serverSession) sendCopyResult(ok bool, message string, size uint64, done bool, perm uint32) error {
+	res := &protocol.FileTransferResult{Success: ok, Message: message, Size: size, Done: done, Perm: perm}
+	return s.Channel.Send(&protocol.PlainPayload{FileResult: res})
+}
+
+// sanitizeCopyPath cleans and validates a file path for copy operations.
 func sanitizeCopyPath(path string) (string, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -419,7 +437,41 @@ func sanitizeCopyPath(path string) (string, error) {
 	return filepath.Clean(trimmed), nil
 }
 
-func (s *serverSession) sendCopyResult(ok bool, message string, size uint64, done bool, perm uint32) error {
-	res := &protocol.FileTransferResult{Success: ok, Message: message, Size: size, Done: done, Perm: perm}
-	return s.Channel.Send(&protocol.PlainPayload{FileResult: res})
+// ensureLocalParent creates parent directories for a given local path if they do not already exist.
+func ensureLocalParent(path string) error {
+	dir := filepath.Dir(path)
+	if dir == "." {
+		return nil
+	}
+	return os.MkdirAll(dir, 0o755)
+}
+
+// parseRemoteTarget parses a remote target specification of the form "clientID@host:path".
+func parseRemoteTarget(arg string) (remoteTarget, bool, error) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return remoteTarget{}, false, nil
+	}
+	at := strings.Index(trimmed, "@")
+	if at == -1 {
+		return remoteTarget{}, false, nil
+	}
+	colon := strings.Index(trimmed[at+1:], ":")
+	if colon == -1 {
+		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing path separator ':'", arg)
+	}
+	colon += at + 1
+	clientID := strings.TrimSpace(trimmed[:at])
+	host := strings.TrimSpace(trimmed[at+1 : colon])
+	path := trimmed[colon+1:]
+	if clientID == "" {
+		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing client id", arg)
+	}
+	if host == "" {
+		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing host", arg)
+	}
+	if path == "" {
+		return remoteTarget{}, false, fmt.Errorf("remote specification %q missing path", arg)
+	}
+	return remoteTarget{clientID: clientID, host: host, path: path}, true, nil
 }

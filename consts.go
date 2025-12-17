@@ -10,4 +10,7 @@ const (
 	seedLabelServerToClient = "qsh-s2c"
 	macLabelClientToServer  = "qsh-c2s-mac"
 	macLabelServerToClient  = "qsh-s2c-mac"
+
+	// file copy buffersize
+	fileCopyBufferSize = 128 * 1024
 )
