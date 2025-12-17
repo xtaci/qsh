@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -24,16 +25,40 @@ const (
 	nonceWindowSize = 10000
 )
 
+// Transport defines the interface for secure bidirectional communication.
+// This abstraction allows different implementations (TCP, WebSocket, QUIC, mock)
+// without changing the core encryption/authentication logic.
+type Transport interface {
+	// Send encrypts and transmits a PlainPayload to the remote peer.
+	Send(payload *protocol.PlainPayload) error
+
+	// Receive blocks until the next PlainPayload is available, decrypts it,
+	// and validates authenticity before returning.
+	Receive() (*protocol.PlainPayload, error)
+
+	// Close releases all resources and closes the underlying connection.
+	Close() error
+}
+
+// Connection abstracts the underlying network connection for testing and flexibility.
+type Connection interface {
+	io.ReadWriter
+	io.Closer
+}
+
 // encryptedChannel wraps the bidirectional authenticated stream, providing
 // serialized Send operations and HMAC verification for Receive operations.
+// It implements the Transport interface.
 type encryptedChannel struct {
-	conn    net.Conn
+	conn    Connection
 	sendPad *qpp.QuantumPermutationPad
 	recvPad *qpp.QuantumPermutationPad
 	sendMac []byte
 	recvMac []byte
 	sendMu  sync.Mutex
 	recvMu  sync.Mutex
+	closed  bool
+	closeMu sync.Mutex
 
 	// Replay protection
 	sendCounter uint64
@@ -41,9 +66,12 @@ type encryptedChannel struct {
 	nonceMu     sync.Mutex
 }
 
+// Ensure encryptedChannel implements Transport interface
+var _ Transport = (*encryptedChannel)(nil)
+
 // newEncryptedChannel prepares a full-duplex channel with independent pads
 // and MAC keys for each direction.
-func newEncryptedChannel(conn net.Conn, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) *encryptedChannel {
+func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) *encryptedChannel {
 	return &encryptedChannel{
 		conn:       conn,
 		sendPad:    sendPad,
@@ -54,9 +82,22 @@ func newEncryptedChannel(conn net.Conn, sendPad, recvPad *qpp.QuantumPermutation
 	}
 }
 
+// NewTransport creates a new Transport from a net.Conn with the given encryption parameters.
+// This is the primary constructor for production use.
+func NewTransport(conn net.Conn, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) Transport {
+	return newEncryptedChannel(conn, sendPad, recvPad, sendMacKey, recvMacKey)
+}
+
 // Send marshals a PlainPayload, encrypts it, and writes a SecureData envelope.
 // Calls are serialized because QPP mutates its internal pad state per use.
 func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
+	c.closeMu.Lock()
+	if c.closed {
+		c.closeMu.Unlock()
+		return fmt.Errorf("channel is closed")
+	}
+	c.closeMu.Unlock()
+
 	if payload == nil {
 		return fmt.Errorf("payload is nil")
 	}
@@ -94,6 +135,13 @@ func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
 // Receive blocks for the next SecureData envelope, decrypts it, and returns the
 // embedded PlainPayload after verifying its MAC and checking for replay attacks.
 func (c *encryptedChannel) Receive() (*protocol.PlainPayload, error) {
+	c.closeMu.Lock()
+	if c.closed {
+		c.closeMu.Unlock()
+		return nil, fmt.Errorf("channel is closed")
+	}
+	c.closeMu.Unlock()
+
 	c.recvMu.Lock()
 	defer c.recvMu.Unlock()
 	env := &protocol.Envelope{}
@@ -180,4 +228,27 @@ func (c *encryptedChannel) pruneOldNonces(now int64) {
 			delete(c.recvNonces, nonce)
 		}
 	}
+}
+
+// Close shuts down the encrypted channel and releases all resources.
+// After Close is called, Send and Receive will return errors.
+func (c *encryptedChannel) Close() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+
+	// Clear sensitive data
+	clear(c.sendMac)
+	clear(c.recvMac)
+
+	// Clear nonce cache
+	c.nonceMu.Lock()
+	c.recvNonces = nil
+	c.nonceMu.Unlock()
+
+	return c.conn.Close()
 }
