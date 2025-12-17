@@ -10,9 +10,10 @@ The server supports multiple concurrent client connections, allowing multiple us
 
 The main interactive shell features is implemented in client.go and server.go.
 
-file.go implements file upload/download feature over the secure channel.
+file.go implements file upload/download feature.
 
-channel.go implements the authenticated and encrypted channel using HMAC, and QPP
+channel.go implements the authenticated and encrypted channel using HMAC for message authentication, and QPP for encryption.
 
 The crypto/ directory has auxciliary cryptographic functions, including loading private keys from encrypted json file, signature decoding/encoding etc.
 
+register.go loads client public key and ID from config file and command line arguments
