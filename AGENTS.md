@@ -8,11 +8,11 @@ The client connects to the server using hppk for authentication and establishes 
 
 The server supports multiple concurrent client connections, allowing multiple users to access the server simultaneously.
 
-client.go and server.go handles client and server commands respectively.
+client.go, server.go, copy.go handles client, server and copy commands respectively.
 
 session.go implements the terminal session handling, including secure channel establishment, reading/writing from/to terminal, handling terminal resize events etc.
 
-file.go implements file upload/download feature.
+transfer.go implements file upload/download.
 
 channel.go implements the authenticated and encrypted channel using HMAC for message authentication, and QPP for encryption.
 
