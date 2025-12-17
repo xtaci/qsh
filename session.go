@@ -79,13 +79,13 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 		return nil, errors.New(msg)
 	}
 
-	// 6. Prepare QPP pads for symmetric encryption
+	// 6. Prepare QPP pads for symmetric encryption and MAC keys for message authentication
+	// NOTE(x): the pad count MUST be a valid prime number within supported range.
 	pads := uint16(challenge.Pads)
 	if !qcrypto.ValidatePadCount(pads) {
 		return nil, fmt.Errorf("unsupported pad count %d (expected prime between %d and %d)", pads, qcrypto.MinPadCount, qcrypto.MaxPadCount)
 	}
 
-	// Derive directional seeds and create QPP instances
 	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, seedLabelClientToServer)
 	if err != nil {
 		return nil, err
@@ -94,8 +94,6 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	if err != nil {
 		return nil, err
 	}
-
-	// Derive directional MAC keys
 	c2sMacKey, err := qcrypto.DeriveDirectionalMAC(masterSeed, macLabelClientToServer)
 	if err != nil {
 		return nil, err
@@ -205,13 +203,13 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 		return nil, errors.New("handshake: client id mismatch")
 	}
 
+	// 6. Verify signature over challenge
 	sig, err := qcrypto.SignatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
 		_ = session.sendAuthResult(false, "invalid signature payload")
 		return nil, fmt.Errorf("decode signature: %w", err)
 	}
 
-	// 6. Verify signature over challenge
 	if !hppk.VerifySignature(sig, challenge, pub) {
 		_ = session.sendAuthResult(false, "signature verification failed")
 		return nil, errors.New("handshake: signature verification failed")
@@ -220,7 +218,7 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 		return nil, err
 	}
 
-	// 7. Prepare QPP pads for symmetric encryption
+	// 7. Prepare QPP pads for symmetric encryption and MAC keys for message authentication
 	c2sSeed, err := qcrypto.DeriveDirectionalSeed(masterSeed, seedLabelClientToServer)
 	if err != nil {
 		return nil, err
@@ -238,7 +236,7 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 		return nil, err
 	}
 
-	// initialize full-duplex encrypted channel
+	// Create full-duplex encrypted channel
 	session.Channel = newEncryptedChannel(conn, qpp.NewQPP(s2cSeed, padCount), qpp.NewQPP(c2sSeed, padCount), s2cMac, c2sMac)
 
 	return session, nil
