@@ -29,6 +29,10 @@ Quick Start
 1. Generate keys (run once):
 
 	```bash
+	# Generate server host key
+	qsh genkey -o ./server_hppk
+	
+	# Generate client key
 	qsh genkey -o ./id_hppk
 	```
 
@@ -37,7 +41,13 @@ Quick Start
 2. Start the server:
 
 	```bash
-	qsh server -l :2323 -c client-1=/etc/qsh/id_hppk.pub
+	qsh server -l :2323 --host-key ./server_hppk -c client-1=/etc/qsh/id_hppk.pub
+	```
+	
+	Or use a clients configuration file:
+	
+	```bash
+	qsh server -l :2323 --host-key ./server_hppk --clients-config /etc/qsh/clients.json
 	```
 
 3. Connect from the client (client mode is the default when no subcommand is provided):
