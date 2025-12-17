@@ -8,7 +8,9 @@ The client connects to the server using hppk for authentication and establishes 
 
 The server supports multiple concurrent client connections, allowing multiple users to access the server simultaneously.
 
-The main interactive shell features is implemented in client.go and server.go.
+client.go and server.go handles client and server commands respectively.
+
+session.go implements the terminal session handling, including secure channel establishment, reading/writing from/to terminal, handling terminal resize events etc.
 
 file.go implements file upload/download feature.
 
