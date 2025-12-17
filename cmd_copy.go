@@ -82,11 +82,11 @@ func runCopyCommand(c *cli.Context) error {
 		}
 		addr = fmt.Sprintf("%s:%d", addr, port)
 	}
-	return executeCopySession(addr, priv, remote.clientID, direction, localPath, remote.path)
+	return executeCopySession(addr, remote.host, priv, remote.clientID, direction, localPath, remote.path)
 }
 
 // executeCopySession establishes a client session and performs the requested file transfer.
-func executeCopySession(addr string, priv *hppk.PrivateKey, clientID string, direction protocol.FileDirection, localPath, remotePath string) error {
+func executeCopySession(addr, hostLabel string, priv *hppk.PrivateKey, clientID string, direction protocol.FileDirection, localPath, remotePath string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func executeCopySession(addr string, priv *hppk.PrivateKey, clientID string, dir
 	defer conn.Close()
 
 	// perform handshake
-	session, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
+	session, err := performClientHandshake(conn, priv, clientID, hostLabel, protocol.ClientMode_CLIENT_MODE_COPY)
 	if err != nil {
 		return err
 	}

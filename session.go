@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/big"
@@ -19,15 +20,47 @@ type clientSession struct {
 	Channel *encryptedChannel
 }
 
-// performClientHandshake mirrors the server handshake and prepares stream pads.
-func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID string, mode protocol.ClientMode) (*clientSession, error) {
-	// 1. Send ClientHello
-	if err := protocol.WriteMessage(conn, &protocol.Envelope{ClientHello: &protocol.ClientHello{ClientId: clientID, Mode: mode}}); err != nil {
+// performClientHandshake mirrors the server handshake, including server authentication.
+func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID, serverLabel string, mode protocol.ClientMode) (*clientSession, error) {
+	serverChallenge := make([]byte, serverChallengeSize)
+	if _, err := rand.Read(serverChallenge); err != nil {
+		return nil, err
+	}
+	clientHello := &protocol.Envelope{ClientHello: &protocol.ClientHello{
+		ClientId:        clientID,
+		Mode:            mode,
+		ServerChallenge: serverChallenge,
+	}}
+	if err := protocol.WriteMessage(conn, clientHello); err != nil {
 		return nil, err
 	}
 	env := &protocol.Envelope{}
 
-	// 2. Receive AuthChallenge
+	if err := protocol.ReadMessage(conn, env); err != nil {
+		return nil, err
+	}
+	serverHello := env.ServerHello
+	if serverHello == nil {
+		return nil, errors.New("handshake: expected server hello")
+	}
+	hostPub, err := qcrypto.UnmarshalPublicKey(serverHello.HostPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("decode server public key: %w", err)
+	}
+	sig, err := qcrypto.SignatureFromProto(serverHello.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("decode server signature: %w", err)
+	}
+	if !hppk.VerifySignature(sig, computeServerChallengeDigest(serverChallenge), hostPub) {
+		return nil, errors.New("handshake: server signature verification failed")
+	}
+	if serverLabel != "" {
+		if err := ensureTrustedHost(serverLabel, hostPub); err != nil {
+			return nil, err
+		}
+	}
+
+	env = &protocol.Envelope{}
 	if err := protocol.ReadMessage(conn, env); err != nil {
 		return nil, err
 	}
@@ -57,11 +90,11 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID strin
 	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
 
 	// 4. Sign challenge and send AuthResponse
-	sig, err := priv.Sign(challenge.Challenge)
+	clientSig, err := priv.Sign(challenge.Challenge)
 	if err != nil {
 		return nil, err
 	}
-	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: qcrypto.SignatureToProto(sig)}}
+	response := &protocol.Envelope{AuthResponse: &protocol.AuthResponse{ClientId: clientID, Signature: qcrypto.SignatureToProto(clientSig)}}
 	if err := protocol.WriteMessage(conn, response); err != nil {
 		return nil, err
 	}
@@ -117,7 +150,10 @@ type serverSession struct {
 }
 
 // performServerHandshake authenticates the client and derives QPP pads.
-func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverSession, error) {
+func performServerHandshake(conn net.Conn, store *clientRegistryStore, hostKey *hppk.PrivateKey) (*serverSession, error) {
+	if hostKey == nil {
+		return nil, errors.New("handshake: server host key unavailable")
+	}
 	session := &serverSession{Conn: conn}
 	// 1. Receive ClientHello
 	env := &protocol.Envelope{}
@@ -128,6 +164,15 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 	if env.ClientHello == nil {
 		_ = session.sendAuthResult(false, "expected client hello")
 		return nil, errors.New("handshake: missing client hello")
+	}
+	if len(env.ClientHello.ServerChallenge) == 0 {
+		return nil, errors.New("handshake: missing server challenge")
+	}
+	if len(env.ClientHello.ServerChallenge) != serverChallengeSize {
+		return nil, fmt.Errorf("handshake: invalid server challenge size %d", len(env.ClientHello.ServerChallenge))
+	}
+	if err := sendServerHello(conn, hostKey, env.ClientHello.ServerChallenge); err != nil {
+		return nil, err
 	}
 
 	mode := env.ClientHello.Mode
@@ -246,4 +291,27 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore) (*serverS
 func (s *serverSession) sendAuthResult(ok bool, message string) error {
 	env := &protocol.Envelope{AuthResult: &protocol.AuthResult{Success: ok, Message: message}}
 	return protocol.WriteMessage(s.Conn, env)
+}
+
+func sendServerHello(conn net.Conn, hostKey *hppk.PrivateKey, challenge []byte) error {
+	pubBytes, err := qcrypto.MarshalPublicKey(hostKey.Public())
+	if err != nil {
+		return err
+	}
+	sig, err := hostKey.Sign(computeServerChallengeDigest(challenge))
+	if err != nil {
+		return err
+	}
+	env := &protocol.Envelope{ServerHello: &protocol.ServerHello{
+		HostPublicKey: pubBytes,
+		Signature:     qcrypto.SignatureToProto(sig),
+	}}
+	return protocol.WriteMessage(conn, env)
+}
+
+func computeServerChallengeDigest(challenge []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte(serverChallengeLabel))
+	h.Write(challenge)
+	return h.Sum(nil)
 }

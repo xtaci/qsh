@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 
 	cli "github.com/urfave/cli/v2"
+	"github.com/xtaci/hppk"
+	qcrypto "github.com/xtaci/qsh/crypto"
 	"github.com/xtaci/qsh/protocol"
 )
 
@@ -13,6 +16,14 @@ func runServerCommand(c *cli.Context) error {
 	addr := c.String("listen")
 	if addr == "" {
 		return exitWithExample("server command requires --listen", exampleServer)
+	}
+	hostKeyPath := c.String("host-key")
+	if hostKeyPath == "" {
+		return exitWithExample("server command requires --host-key", exampleServer)
+	}
+	hostKey, err := qcrypto.LoadPrivateKey(hostKeyPath)
+	if err != nil {
+		return fmt.Errorf("load host key %s: %w", hostKeyPath, err)
 	}
 	configPath := c.String("clients-config")
 	entries, err := parseClientEntries(c.StringSlice("client"))
@@ -30,11 +41,11 @@ func runServerCommand(c *cli.Context) error {
 		return err
 	}
 	store := newClientRegistryStore(registry)
-	return runServer(addr, store, loader, configPath != "")
+	return runServer(addr, store, loader, configPath != "", hostKey)
 }
 
 // runServer accepts TCP clients and performs the secure handshake per session.
-func runServer(addr string, store *clientRegistryStore, loader registryLoader, watchReload bool) error {
+func runServer(addr string, store *clientRegistryStore, loader registryLoader, watchReload bool, hostKey *hppk.PrivateKey) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -53,7 +64,7 @@ func runServer(addr string, store *clientRegistryStore, loader registryLoader, w
 			continue
 		}
 		go func() {
-			if err := handleServerConn(conn, store); err != nil {
+			if err := handleServerConn(conn, store, hostKey); err != nil {
 				log.Printf("connection closed: %v", err)
 			}
 		}()
@@ -61,9 +72,9 @@ func runServer(addr string, store *clientRegistryStore, loader registryLoader, w
 }
 
 // handleServerConn runs the handshake and launches the PTY bridge for a client.
-func handleServerConn(conn net.Conn, store *clientRegistryStore) error {
+func handleServerConn(conn net.Conn, store *clientRegistryStore, hostKey *hppk.PrivateKey) error {
 	defer conn.Close()
-	session, err := performServerHandshake(conn, store)
+	session, err := performServerHandshake(conn, store, hostKey)
 	if err != nil {
 		return err
 	}

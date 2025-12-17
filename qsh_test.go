@@ -51,6 +51,8 @@ func TestHPPKAuthFailOnTamper(t *testing.T) {
 func TestPerformHandshakesEndToEnd(t *testing.T) {
 	client, err := hppk.GenerateKey(8)
 	require.NoError(t, err)
+	hostKey, err := hppk.GenerateKey(8)
+	require.NoError(t, err)
 
 	const clientID = "client-1"
 	registry := clientRegistry{clientID: client.Public()}
@@ -68,11 +70,11 @@ func TestPerformHandshakesEndToEnd(t *testing.T) {
 	}
 	srvCh := make(chan serverResult, 1)
 	go func() {
-		session, err := performServerHandshake(serverConn, store)
+		session, err := performServerHandshake(serverConn, store, hostKey)
 		srvCh <- serverResult{session: session, err: err}
 	}()
 
-	clientSession, err := performClientHandshake(clientConn, client, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
+	clientSession, err := performClientHandshake(clientConn, client, clientID, "", protocol.ClientMode_CLIENT_MODE_SHELL)
 	require.NoError(t, err)
 	require.NotNil(t, clientSession)
 
@@ -202,6 +204,8 @@ func setupCopySession(t *testing.T) copySession {
 	t.Helper()
 	clientKey, err := hppk.GenerateKey(8)
 	require.NoError(t, err)
+	hostKey, err := hppk.GenerateKey(8)
+	require.NoError(t, err)
 	const clientID = "copy-client"
 	registry := clientRegistry{clientID: clientKey.Public()}
 	store := newClientRegistryStore(registry)
@@ -216,10 +220,10 @@ func setupCopySession(t *testing.T) copySession {
 	}
 	srvCh := make(chan srvRes, 1)
 	go func() {
-		session, err := performServerHandshake(serverConn, store)
+		session, err := performServerHandshake(serverConn, store, hostKey)
 		srvCh <- srvRes{session: session, err: err}
 	}()
-	clientSession, err := performClientHandshake(clientConn, clientKey, clientID, protocol.ClientMode_CLIENT_MODE_COPY)
+	clientSession, err := performClientHandshake(clientConn, clientKey, clientID, "", protocol.ClientMode_CLIENT_MODE_COPY)
 	require.NoError(t, err)
 	require.NotNil(t, clientSession)
 	srv := <-srvCh

@@ -11,7 +11,7 @@ import (
 
 const (
 	exampleGenKey = "qsh genkey -o ./id_hppk"
-	exampleServer = "qsh server --clients-config /etc/qsh/clients.json"
+	exampleServer = "qsh server --host-key ./server_hppk --clients-config /etc/qsh/clients.json"
 	exampleClient = "qsh -i ./id_hppk -P 2222 client-1@127.0.0.1"
 	exampleCopy   = "qsh copy ./file client-1@203.0.113.10:/tmp/file"
 )
@@ -43,6 +43,7 @@ func main() {
 					&cli.StringFlag{Name: "listen", Aliases: []string{"l"}, Value: ":2222", Usage: "listen address (default :2222)"},
 					&cli.StringSliceFlag{Name: "client", Aliases: []string{"c"}, Usage: "allowed client entry in the form id=/path/to/id_hppk.pub (repeatable)"},
 					&cli.StringFlag{Name: "clients-config", Aliases: []string{"C"}, Usage: "path to JSON file mapping client IDs to public keys"},
+					&cli.StringFlag{Name: "host-key", Aliases: []string{"H"}, Value: "./server_hppk", Usage: "path to the server host private key"},
 				},
 				Action: runServerCommand,
 			},

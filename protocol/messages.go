@@ -9,6 +9,7 @@ type Envelope struct {
 	AuthResponse  *AuthResponse  `protobuf:"bytes,3,opt,name=auth_response,json=authResponse,proto3" json:"auth_response,omitempty"`
 	AuthResult    *AuthResult    `protobuf:"bytes,4,opt,name=auth_result,json=authResult,proto3" json:"auth_result,omitempty"`
 	SecureData    *SecureData    `protobuf:"bytes,5,opt,name=secure_data,json=secureData,proto3" json:"secure_data,omitempty"`
+	ServerHello   *ServerHello   `protobuf:"bytes,6,opt,name=server_hello,json=serverHello,proto3" json:"server_hello,omitempty"`
 }
 
 func (m *Envelope) Reset()         { *m = Envelope{} }
@@ -17,13 +18,24 @@ func (*Envelope) ProtoMessage()    {}
 
 // ClientHello identifies the connecting client.
 type ClientHello struct {
-	ClientId string     `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	Mode     ClientMode `protobuf:"varint,2,opt,name=mode,proto3,enum=qsh.protocol.ClientMode" json:"mode,omitempty"`
+	ClientId        string     `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Mode            ClientMode `protobuf:"varint,2,opt,name=mode,proto3,enum=qsh.protocol.ClientMode" json:"mode,omitempty"`
+	ServerChallenge []byte     `protobuf:"bytes,3,opt,name=server_challenge,json=serverChallenge,proto3" json:"server_challenge,omitempty"`
 }
 
 func (m *ClientHello) Reset()         { *m = ClientHello{} }
 func (m *ClientHello) String() string { return proto.CompactTextString(m) }
 func (*ClientHello) ProtoMessage()    {}
+
+// ServerHello conveys the server's host key and proof of possession.
+type ServerHello struct {
+	HostPublicKey []byte     `protobuf:"bytes,1,opt,name=host_public_key,json=hostPublicKey,proto3" json:"host_public_key,omitempty"`
+	Signature     *Signature `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+}
+
+func (m *ServerHello) Reset()         { *m = ServerHello{} }
+func (m *ServerHello) String() string { return proto.CompactTextString(m) }
+func (*ServerHello) ProtoMessage()    {}
 
 type ClientMode int32
 

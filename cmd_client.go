@@ -61,7 +61,7 @@ func runClientCommand(c *cli.Context) error {
 	}
 
 	// Run client connection with the private key
-	if err := runClient(addr, priv, clientID); err != nil {
+	if err := runClient(addr, hostPart, priv, clientID); err != nil {
 		if isIdentityError(err) {
 			return fmt.Errorf("client connection failed (verify identity %s): %v", identity, err)
 		}
@@ -81,7 +81,7 @@ func isIdentityError(err error) bool {
 }
 
 // runClient dials the server, completes the handshake, and attaches local TTY IO.
-func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
+func runClient(addr, hostLabel string, priv *hppk.PrivateKey, clientID string) error {
 	// Connect to server
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -90,7 +90,7 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 	defer conn.Close()
 
 	// Perform handshake
-	session, err := performClientHandshake(conn, priv, clientID, protocol.ClientMode_CLIENT_MODE_SHELL)
+	session, err := performClientHandshake(conn, priv, clientID, hostLabel, protocol.ClientMode_CLIENT_MODE_SHELL)
 	if err != nil {
 		return err
 	}

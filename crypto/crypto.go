@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -250,4 +251,37 @@ func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// MarshalPublicKey serializes an HPPK public key to canonical JSON.
+func MarshalPublicKey(pub *hppk.PublicKey) ([]byte, error) {
+	if pub == nil {
+		return nil, errors.New("public key is nil")
+	}
+	return json.Marshal(pub)
+}
+
+// UnmarshalPublicKey decodes an HPPK public key from JSON.
+func UnmarshalPublicKey(data []byte) (*hppk.PublicKey, error) {
+	if len(data) == 0 {
+		return nil, errors.New("public key payload is empty")
+	}
+	var pub hppk.PublicKey
+	if err := json.Unmarshal(data, &pub); err != nil {
+		return nil, err
+	}
+	return &pub, nil
+}
+
+// FingerprintPublicKey returns a short deterministic fingerprint for display/trust decisions.
+func FingerprintPublicKey(pub *hppk.PublicKey) (string, error) {
+	payload, err := MarshalPublicKey(pub)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	const fingerprintBytes = 10
+	return base32NoPad.EncodeToString(sum[:fingerprintBytes]), nil
 }

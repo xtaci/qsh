@@ -11,12 +11,19 @@ message Envelope {
     AuthResponse auth_response = 3;
     AuthResult auth_result = 4;
     SecureData secure_data = 5;
+    ServerHello server_hello = 6;
   }
 }
 
 message ClientHello {
   string client_id = 1;
   ClientMode mode = 2;
+  bytes server_challenge = 3;
+}
+
+message ServerHello {
+  bytes host_public_key = 1;
+  Signature signature = 2;
 }
 
 enum ClientMode {
