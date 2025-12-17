@@ -15,6 +15,5 @@ const (
 	fileCopyBufferSize = 128 * 1024
 
 	// Server authentication challenge parameters.
-	serverChallengeLabel = "qsh-server-auth"
-	serverChallengeSize  = 48
+	serverChallengeSize = 48
 )
