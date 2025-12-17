@@ -6,7 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base32"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,7 +67,7 @@ func LoadPublicKey(path string) (*hppk.PublicKey, error) {
 	return &pub, nil
 }
 
-// GenerateKeyPair creates a new HPPK keypair, encrypts the private key, and persists both halves.
+// GenerateKeyPair creates a new HPPK keypair, optionally encrypts the private key, and persists both halves.
 func GenerateKeyPair(path string, strength int, passphrase []byte) error {
 	if path == "" {
 		return errors.New("genkey requires a target path")
@@ -79,11 +79,17 @@ func GenerateKeyPair(path string, strength int, passphrase []byte) error {
 	if err != nil {
 		return err
 	}
-	encBlob, err := encryptPrivateKey(priv, passphrase)
-	if err != nil {
-		return err
+	var privatePayload any
+	if len(passphrase) == 0 {
+		privatePayload = priv
+	} else {
+		encBlob, err := encryptPrivateKey(priv, passphrase)
+		if err != nil {
+			return err
+		}
+		privatePayload = encBlob
 	}
-	if err := writeJSONFile(path, 0o600, encBlob); err != nil {
+	if err := writeJSONFile(path, 0o600, privatePayload); err != nil {
 		return err
 	}
 	pubPath := path + ".pub"
@@ -253,8 +259,6 @@ func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {
 	return out, nil
 }
 
-var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
-
 // MarshalPublicKey serializes an HPPK public key to canonical JSON.
 func MarshalPublicKey(pub *hppk.PublicKey) ([]byte, error) {
 	if pub == nil {
@@ -282,6 +286,5 @@ func FingerprintPublicKey(pub *hppk.PublicKey) (string, error) {
 		return "", err
 	}
 	sum := sha256.Sum256(payload)
-	const fingerprintBytes = 10
-	return base32NoPad.EncodeToString(sum[:fingerprintBytes]), nil
+	return base64.StdEncoding.EncodeToString(sum[:]), nil
 }

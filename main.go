@@ -77,14 +77,14 @@ func runGenKeyCommand(c *cli.Context) error {
 	if strength <= 0 {
 		return exitWithExample("--strength must be a positive integer", exampleGenKey)
 	}
-	pass, err := qcrypto.PromptPassword("Enter passphrase for new private key: ", true)
+	pass, err := qcrypto.PromptPassword("Enter passphrase for new private key (leave empty for unencrypted): ", true)
 	if err != nil {
 		return err
 	}
-	if len(pass) == 0 {
-		return exitWithExample("passphrase cannot be empty", exampleGenKey)
-	}
 	defer clear(pass)
+	if len(pass) == 0 {
+		fmt.Fprintln(os.Stderr, "Warning: storing private key without encryption; protect the file permissions carefully.")
+	}
 	if err := qcrypto.GenerateKeyPair(path, strength, pass); err != nil {
 		return fmt.Errorf("%w\nExample: %s", err, exampleGenKey)
 	}
