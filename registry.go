@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -49,7 +50,25 @@ func (s *clientRegistryStore) Replace(reg clientRegistry) {
 }
 
 // parseClientEntries parses client entries from command-line arguments.
+// Relative paths are resolved relative to the directory containing the qsh executable.
 func parseClientEntries(values []string) ([]clientEntry, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	// Get the directory containing the qsh executable
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("get executable path: %w", err)
+	}
+	execDir := filepath.Dir(executable)
+
+	return parseClientEntriesWithBaseDir(values, execDir)
+}
+
+// parseClientEntriesWithBaseDir parses client entries and resolves relative paths
+// against the provided base directory. This function is extracted for testability.
+func parseClientEntriesWithBaseDir(values []string, baseDir string) ([]clientEntry, error) {
 	var entries []clientEntry
 	for _, value := range values {
 		parts := strings.SplitN(value, "=", 2)
@@ -60,6 +79,10 @@ func parseClientEntries(values []string) ([]clientEntry, error) {
 		path := strings.TrimSpace(parts[1])
 		if id == "" || path == "" {
 			return nil, fmt.Errorf("invalid client entry %q", value)
+		}
+		// Convert relative paths to absolute paths relative to base directory
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(baseDir, path)
 		}
 		entries = append(entries, clientEntry{id: id, path: path})
 	}
