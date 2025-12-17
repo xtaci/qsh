@@ -3,15 +3,12 @@ package main
 import (
 	"fmt"
 	"net"
-	"os"
 	"strings"
-	"sync"
 
 	cli "github.com/urfave/cli/v2"
 	"github.com/xtaci/hppk"
 	qcrypto "github.com/xtaci/qsh/crypto"
 	"github.com/xtaci/qsh/protocol"
-	"golang.org/x/term"
 )
 
 // runClientCommand handles the default command execution(client mode).
@@ -98,30 +95,5 @@ func runClient(addr string, priv *hppk.PrivateKey, clientID string) error {
 		return err
 	}
 
-	// Set terminal to raw mode
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err == nil {
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
-	}
-
-	// Send initial terminal size
-	rows, cols := session.getWinsize()
-	_ = session.Channel.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
-
-	done := make(chan struct{})
-	var once sync.Once
-	stop := func() { once.Do(func() { close(done) }) }
-
-	// Start terminal resize handler goroutine
-	go session.handleClientResize(done)
-
-	// Start IO forwarding
-	errCh := make(chan error, 2)
-	go func() { errCh <- session.forwardStdIn() }()
-	go func() { errCh <- session.readServerOutput() }()
-
-	// Wait for any IO error
-	err = <-errCh
-	stop()
-	return err
+	return session.startInteractiveShell()
 }
