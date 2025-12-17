@@ -2,14 +2,26 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/xtaci/qpp"
 	"github.com/xtaci/qsh/protocol"
+)
+
+const (
+	// nonceSize defines the length of nonces for replay protection
+	nonceSize = 16
+	// maxTimestampSkew defines the maximum acceptable clock difference in seconds
+	maxTimestampSkew = 300 // 5 minutes
+	// nonceWindowSize defines how many recent nonces to track for replay detection
+	nonceWindowSize = 10000
 )
 
 // encryptedChannel wraps the bidirectional authenticated stream, providing
@@ -22,17 +34,23 @@ type encryptedChannel struct {
 	recvMac []byte
 	sendMu  sync.Mutex
 	recvMu  sync.Mutex
+
+	// Replay protection
+	sendCounter uint64
+	recvNonces  map[string]int64 // nonce -> timestamp
+	nonceMu     sync.Mutex
 }
 
 // newEncryptedChannel prepares a full-duplex channel with independent pads
 // and MAC keys for each direction.
 func newEncryptedChannel(conn net.Conn, sendPad, recvPad *qpp.QuantumPermutationPad, sendMacKey, recvMacKey []byte) *encryptedChannel {
 	return &encryptedChannel{
-		conn:    conn,
-		sendPad: sendPad,
-		recvPad: recvPad,
-		sendMac: append([]byte(nil), sendMacKey...),
-		recvMac: append([]byte(nil), recvMacKey...),
+		conn:       conn,
+		sendPad:    sendPad,
+		recvPad:    recvPad,
+		sendMac:    append([]byte(nil), sendMacKey...),
+		recvMac:    append([]byte(nil), recvMacKey...),
+		recvNonces: make(map[string]int64),
 	}
 }
 
@@ -48,14 +66,33 @@ func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
 	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+
+	// Generate unique nonce for replay protection
+	nonce := make([]byte, nonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return fmt.Errorf("generate nonce: %w", err)
+	}
+
+	// Add monotonic counter to nonce for extra uniqueness
+	binary.BigEndian.PutUint64(nonce[8:], c.sendCounter)
+	c.sendCounter++
+
+	// Get current timestamp
+	timestamp := time.Now().Unix()
+
 	cipher := c.encryptBuffer(plain)
-	mac := c.computePayloadHMAC(c.sendMac, plain)
-	env := &protocol.Envelope{SecureData: &protocol.SecureData{Ciphertext: cipher, Mac: mac}}
+	mac := c.computePayloadHMAC(c.sendMac, plain, nonce, timestamp)
+	env := &protocol.Envelope{SecureData: &protocol.SecureData{
+		Ciphertext: cipher,
+		Mac:        mac,
+		Nonce:      nonce,
+		Timestamp:  timestamp,
+	}}
 	return protocol.WriteMessage(c.conn, env)
 }
 
 // Receive blocks for the next SecureData envelope, decrypts it, and returns the
-// embedded PlainPayload after verifying its MAC.
+// embedded PlainPayload after verifying its MAC and checking for replay attacks.
 func (c *encryptedChannel) Receive() (*protocol.PlainPayload, error) {
 	c.recvMu.Lock()
 	defer c.recvMu.Unlock()
@@ -66,8 +103,37 @@ func (c *encryptedChannel) Receive() (*protocol.PlainPayload, error) {
 	if env.SecureData == nil {
 		return nil, fmt.Errorf("unexpected non-secure message received")
 	}
+
+	// Validate timestamp to prevent replay attacks with old messages
+	now := time.Now().Unix()
+	if env.SecureData.Timestamp == 0 {
+		return nil, fmt.Errorf("missing timestamp in secure data")
+	}
+	timeDiff := now - env.SecureData.Timestamp
+	if timeDiff < -maxTimestampSkew || timeDiff > maxTimestampSkew {
+		return nil, fmt.Errorf("timestamp out of acceptable range (diff: %d seconds)", timeDiff)
+	}
+
+	// Check nonce for replay detection
+	if len(env.SecureData.Nonce) != nonceSize {
+		return nil, fmt.Errorf("invalid nonce size: %d", len(env.SecureData.Nonce))
+	}
+	nonceKey := string(env.SecureData.Nonce)
+	c.nonceMu.Lock()
+	if _, exists := c.recvNonces[nonceKey]; exists {
+		c.nonceMu.Unlock()
+		return nil, fmt.Errorf("replay attack detected: duplicate nonce")
+	}
+	// Store nonce with timestamp
+	c.recvNonces[nonceKey] = env.SecureData.Timestamp
+	// Clean up old nonces if window is too large
+	if len(c.recvNonces) > nonceWindowSize {
+		c.pruneOldNonces(now)
+	}
+	c.nonceMu.Unlock()
+
 	plain := c.decryptBuffer(env.SecureData.Ciphertext)
-	expected := c.computePayloadHMAC(c.recvMac, plain)
+	expected := c.computePayloadHMAC(c.recvMac, plain, env.SecureData.Nonce, env.SecureData.Timestamp)
 	if !hmac.Equal(expected, env.SecureData.Mac) {
 		return nil, fmt.Errorf("payload hmac mismatch")
 	}
@@ -93,9 +159,25 @@ func (c *encryptedChannel) decryptBuffer(data []byte) []byte {
 	return buf
 }
 
-// computePayloadHMAC computes an HMAC-SHA256 over data using key.
-func (c *encryptedChannel) computePayloadHMAC(key, data []byte) []byte {
+// computePayloadHMAC computes an HMAC-SHA256 over data, nonce, and timestamp using key.
+func (c *encryptedChannel) computePayloadHMAC(key, data, nonce []byte, timestamp int64) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(data)
+	h.Write(nonce)
+	// Include timestamp in MAC to bind it cryptographically
+	tsBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(tsBytes, uint64(timestamp))
+	h.Write(tsBytes)
 	return h.Sum(nil)
+}
+
+// pruneOldNonces removes nonces older than the acceptable time window.
+// Must be called with nonceMu held.
+func (c *encryptedChannel) pruneOldNonces(now int64) {
+	cutoff := now - maxTimestampSkew
+	for nonce, ts := range c.recvNonces {
+		if ts < cutoff {
+			delete(c.recvNonces, nonce)
+		}
+	}
 }

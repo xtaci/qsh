@@ -85,6 +85,8 @@ func (*AuthResult) ProtoMessage()    {}
 type SecureData struct {
 	Ciphertext []byte `protobuf:"bytes,1,opt,name=ciphertext,proto3" json:"ciphertext,omitempty"`
 	Mac        []byte `protobuf:"bytes,2,opt,name=mac,proto3" json:"mac,omitempty"`
+	Nonce      []byte `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Timestamp  int64  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 }
 
 func (m *SecureData) Reset()         { *m = SecureData{} }
