@@ -19,13 +19,6 @@ import (
 	"golang.org/x/term"
 )
 
-// SessionKeyBytes defines how many bytes of keying material we derive for each
-// QPP pad direction.
-const SessionKeyBytes = 256
-
-// hmacKeyBytes defines the length of the per-direction integrity key.
-const hmacKeyBytes = 32
-
 // LoadPrivateKey reads an HPPK private key and decrypts it if needed.
 func LoadPrivateKey(path string) (*hppk.PrivateKey, error) {
 	data, err := os.ReadFile(path)
@@ -33,7 +26,7 @@ func LoadPrivateKey(path string) (*hppk.PrivateKey, error) {
 		return nil, err
 	}
 	var encrypted encryptedKeyFile
-	if err := json.Unmarshal(data, &encrypted); err == nil && encrypted.Type == encryptedKeyType {
+	if err := json.Unmarshal(data, &encrypted); err == nil && encrypted.Type == EncryptedKeyType {
 		pass, err := PromptPassword(fmt.Sprintf("Enter passphrase for %s: ", path), false)
 		if err != nil {
 			return nil, err
@@ -129,14 +122,6 @@ type encryptedKeyFile struct {
 	PublicKey  *hppk.PublicKey `json:"public_key,omitempty"`
 }
 
-const (
-	kdfName          = "scrypt"
-	scryptCostN      = 1 << 15
-	scryptCostR      = 8
-	scryptCostP      = 1
-	encryptedKeyType = "encrypted-hppk"
-)
-
 // encryptPrivateKey encrypts an HPPK private key using the given passphrase.
 func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyFile, error) {
 	if len(passphrase) == 0 {
@@ -146,7 +131,7 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	key, err := scrypt.Key(passphrase, salt, scryptCostN, scryptCostR, scryptCostP, 32)
+	key, err := scrypt.Key(passphrase, salt, ScryptCostN, ScryptCostR, ScryptCostP, 32)
 	if err != nil {
 		return nil, err
 	}
@@ -170,12 +155,12 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 	ciphertext := gcm.Seal(nil, nonce, plain, nil)
 	clear(plain)
 	return &encryptedKeyFile{
-		Type:       encryptedKeyType,
+		Type:       EncryptedKeyType,
 		Version:    1,
-		KDF:        kdfName,
-		ScryptN:    scryptCostN,
-		ScryptR:    scryptCostR,
-		ScryptP:    scryptCostP,
+		KDF:        KdfName,
+		ScryptN:    ScryptCostN,
+		ScryptR:    ScryptCostR,
+		ScryptP:    ScryptCostP,
 		Salt:       salt,
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
@@ -185,18 +170,18 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 
 // decryptPrivateKey decrypts an encrypted private key file using the given passphrase.
 func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error) {
-	if enc.KDF != kdfName {
+	if enc.KDF != KdfName {
 		return nil, fmt.Errorf("unsupported kdf %s", enc.KDF)
 	}
 	N, r, p := enc.ScryptN, enc.ScryptR, enc.ScryptP
 	if N == 0 {
-		N = scryptCostN
+		N = ScryptCostN
 	}
 	if r == 0 {
-		r = scryptCostR
+		r = ScryptCostR
 	}
 	if p == 0 {
-		p = scryptCostP
+		p = ScryptCostP
 	}
 	key, err := scrypt.Key(passphrase, enc.Salt, N, r, p, 32)
 	if err != nil {
@@ -255,7 +240,7 @@ func DeriveDirectionalSeed(master []byte, label string) ([]byte, error) {
 
 // DeriveDirectionalMAC returns the per-direction MAC key.
 func DeriveDirectionalMAC(master []byte, label string) ([]byte, error) {
-	return deriveKeyMaterial(master, label, hmacKeyBytes)
+	return deriveKeyMaterial(master, label, HmacKeyBytes)
 }
 
 func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {

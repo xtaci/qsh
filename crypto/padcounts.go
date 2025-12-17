@@ -6,11 +6,6 @@ import (
 	"math/big"
 )
 
-const (
-	MinPadCount = 1024
-	MaxPadCount = 2048
-)
-
 var primePadCounts = generatePrimePadCounts()
 
 // generatePrimePadCounts generates a slice of prime numbers between MinPadCount and MaxPadCount.
