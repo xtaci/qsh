@@ -10,6 +10,8 @@ qsh
 [5]: https://img.shields.io/github/created-at/xtaci/qsh
 [6]: https://img.shields.io/github/created-at/xtaci/qsh
 
+English | [简体中文](README-zh-CN.md)
+
 Status: Developing
 
 Overview
