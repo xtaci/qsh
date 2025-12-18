@@ -7,7 +7,7 @@ require (
 	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.9.0
 	github.com/urfave/cli/v2 v2.27.4
-	github.com/xtaci/hppk v1.1.1
+	github.com/xtaci/hppk v1.1.2
 	github.com/xtaci/qpp v1.1.20
 	golang.org/x/crypto v0.46.0
 	golang.org/x/term v0.38.0

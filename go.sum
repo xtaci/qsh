@@ -25,6 +25,8 @@ github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 h1:gEOO8jv9F4OT7lGC
 github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1/go.mod h1:Ohn+xnUBiLI6FVj/9LpzZWtj1/D6lUovWYBkxHVV3aM=
 github.com/xtaci/hppk v1.1.1 h1:D0KzpbWzGTvKjydutU42MOtF/r7Z67fB5VfWkRN6fwE=
 github.com/xtaci/hppk v1.1.1/go.mod h1:JcxZVK7aG2Ra+JEXN1EQ3ENtCzpib0QnjXcfnzuY3+A=
+github.com/xtaci/hppk v1.1.2 h1:HEh8A44bHqcUhROxhDFuYBho38hm65fxuUG8+hfkmE4=
+github.com/xtaci/hppk v1.1.2/go.mod h1:JcxZVK7aG2Ra+JEXN1EQ3ENtCzpib0QnjXcfnzuY3+A=
 github.com/xtaci/qpp v1.1.18 h1:FyULigD8/msXdxj9AjOFQg3/Z/tGz4574n21shZ6SZo=
 github.com/xtaci/qpp v1.1.18/go.mod h1:DI0dcoZ+qu4ze5C0hkt8grLfTVqBiZ3hXTimGyg5TTI=
 github.com/xtaci/qpp v1.1.20 h1:evCnh45gj5KSZY5ypO1OfEPuf/jGRbQdcLNfchqwrwU=
