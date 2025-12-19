@@ -31,7 +31,7 @@ The project follows a modular architecture:
 *   **`encryptedChannel`**: Implements the `Transport` interface. It handles:
     *   **Encryption/Decryption**: Uses QPP pads derived from the session key.
     *   **Integrity**: Uses HMAC-SHA256 to verify message authenticity.
-    *   **Replay Protection**: Maintains a sliding window of nonces (using a min-heap) to prevent replay attacks.
+    *   **Replay Protection**: Uses a combination of timestamp validation (rejecting old/future packets) and a sliding window of nonces (using a min-heap) to prevent replay attacks.
 *   **`crypto/`**: Contains helper functions for HPPK key loading, signature handling, and padding.
 
 ### 4. Session Management (`session.go`)

@@ -72,8 +72,10 @@ type nonceEntry struct {
 
 // hashNonceValue compact a nonce for memory-efficient storage.
 func hashNonceValue(nonce []byte) uint64 {
-	sum := sha256.Sum256(nonce)
-	return binary.BigEndian.Uint64(sum[:8])
+	// Optimization: Use the first 8 bytes of the nonce directly as the key.
+	// The nonce is 16 bytes: 8 bytes random + 8 bytes counter.
+	// Using the random part is sufficient for distribution and avoids SHA256 overhead.
+	return binary.BigEndian.Uint64(nonce[:8])
 }
 
 // nonceMinHeap implements a min-heap for nonce entries based on timestamp,
@@ -214,6 +216,15 @@ func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 	// Ensure timestamp is present so it stays bound to MAC
 	if env.SecureData.Timestamp == 0 {
 		return nil, fmt.Errorf("missing timestamp in secure data")
+	}
+
+	// Check timestamp validity to prevent replay of old packets
+	now := time.Now().Unix()
+	if now-env.SecureData.Timestamp > maxPacketAge {
+		return nil, fmt.Errorf("packet too old (timestamp %d, now %d)", env.SecureData.Timestamp, now)
+	}
+	if env.SecureData.Timestamp-now > maxPacketAge {
+		return nil, fmt.Errorf("packet from the future (timestamp %d, now %d)", env.SecureData.Timestamp, now)
 	}
 
 	// Check nonce for replay detection

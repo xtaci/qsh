@@ -16,4 +16,8 @@ const (
 
 	// Server authentication challenge parameters.
 	serverChallengeSize = 48
+
+	// maxPacketAge defines the maximum age of a packet before it is rejected.
+	// This prevents replay attacks with old packets that have been pruned from the nonce heap.
+	maxPacketAge = 120 // seconds
 )
