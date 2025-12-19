@@ -2,6 +2,8 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -56,7 +58,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID, serv
 		return nil, fmt.Errorf("decode server signature: %w", err)
 	}
 
-	if !hppk.VerifySignature(sig, serverChallenge, hostPub) {
+	if !hppk.VerifySignature(sig, hashClientHello(clientHello.ClientHello), hostPub) {
 		return nil, errors.New("handshake: server signature verification failed")
 	}
 
@@ -99,7 +101,7 @@ func performClientHandshake(conn net.Conn, priv *hppk.PrivateKey, clientID, serv
 	copy(masterSeed[keySize-len(secretBytes):], secretBytes)
 
 	// 5. Sign challenge and send AuthResponse
-	clientSig, err := priv.Sign(challenge.Challenge)
+	clientSig, err := priv.Sign(hashAuthChallenge(challenge))
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +175,7 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore, hostKey *
 	}
 
 	if env.ClientHello == nil {
-		_ = session.sendAuthResult(false, "expected client hello")
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, errors.New("handshake: missing client hello")
 	}
 
@@ -182,12 +184,12 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore, hostKey *
 	session.ClientID = clientID
 	registry := store.Get()
 	if registry == nil {
-		_ = session.sendAuthResult(false, "registry unavailable")
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, errors.New("handshake: registry unavailable")
 	}
 	pub, ok := registry[clientID]
 	if !ok {
-		_ = session.sendAuthResult(false, "unknown client")
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, fmt.Errorf("unknown client %s", clientID)
 	}
 
@@ -204,7 +206,7 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore, hostKey *
 		return nil, err
 	}
 
-	serverSig, err := hostKey.Sign(env.ClientHello.ServerChallenge)
+	serverSig, err := hostKey.Sign(hashClientHello(env.ClientHello))
 	if err != nil {
 		return nil, err
 	}
@@ -268,24 +270,24 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore, hostKey *
 	}
 
 	if env.AuthResponse == nil {
-		_ = session.sendAuthResult(false, "expected auth response")
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, errors.New("handshake: missing auth response")
 	}
 
 	if env.AuthResponse.ClientId != clientID {
-		_ = session.sendAuthResult(false, "client id mismatch")
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, errors.New("handshake: client id mismatch")
 	}
 
 	// 8. Verify signature over challenge
 	sig, err := qcrypto.SignatureFromProto(env.AuthResponse.Signature)
 	if err != nil {
-		_ = session.sendAuthResult(false, "invalid signature payload")
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, fmt.Errorf("decode signature: %w", err)
 	}
 
-	if !hppk.VerifySignature(sig, challenge, pub) {
-		_ = session.sendAuthResult(false, "signature verification failed")
+	if !hppk.VerifySignature(sig, hashAuthChallenge(challengeMsg.AuthChallenge), pub) {
+		_ = session.sendAuthResult(false, "authentication failed")
 		return nil, errors.New("handshake: signature verification failed")
 	}
 	if err := session.sendAuthResult(true, "authentication success"); err != nil {
@@ -320,4 +322,22 @@ func performServerHandshake(conn net.Conn, store *clientRegistryStore, hostKey *
 func (s *serverSession) sendAuthResult(ok bool, message string) error {
 	env := &protocol.Envelope{AuthResult: &protocol.AuthResult{Success: ok, Message: message}}
 	return protocol.WriteMessage(s.Conn, env)
+}
+
+func hashClientHello(hello *protocol.ClientHello) []byte {
+	h := sha256.New()
+	h.Write([]byte(hello.ClientId))
+	binary.Write(h, binary.BigEndian, int32(hello.Mode))
+	h.Write(hello.ServerChallenge)
+	return h.Sum(nil)
+}
+
+func hashAuthChallenge(chal *protocol.AuthChallenge) []byte {
+	h := sha256.New()
+	h.Write(chal.Challenge)
+	h.Write(chal.KemP)
+	h.Write(chal.KemQ)
+	binary.Write(h, binary.BigEndian, chal.Pads)
+	binary.Write(h, binary.BigEndian, chal.SessionKeySize)
+	return h.Sum(nil)
 }
