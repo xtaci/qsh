@@ -64,10 +64,10 @@ type encryptedChannel struct {
 	nonceMu     sync.Mutex
 }
 
-// nonceEntry represents a tracked nonce with its hash and timestamp.
+// nonceEntry represents a tracked nonce with its hash.
 type nonceEntry struct {
-	hash      uint64 // compact nonce to reduce memory usage
-	timestamp int64
+	hash uint64 // compact nonce to reduce memory usage
+	seq  uint32 // insertion sequence for stability
 }
 
 // hashNonceValue compact a nonce for memory-efficient storage.
@@ -78,10 +78,11 @@ func hashNonceValue(nonce []byte) uint64 {
 	return binary.BigEndian.Uint64(nonce[:8])
 }
 
-// nonceMinHeap implements a min-heap for nonce entries based on timestamp,
+// nonceMinHeap implements a min-heap for nonce entries based on insertion sequence.
 type nonceMinHeap struct {
 	entries     []nonceEntry // heap of nonce entries
 	nonceHashes map[uint64]struct{}
+	nextSeq     uint32
 }
 
 func newNonceMinHeap() *nonceMinHeap {
@@ -91,9 +92,13 @@ func newNonceMinHeap() *nonceMinHeap {
 	}
 }
 
+func _itimediff(later, earlier uint32) int32 {
+	return (int32)(later - earlier)
+}
+
 func (h nonceMinHeap) Len() int { return len(h.entries) }
 func (h nonceMinHeap) Less(i, j int) bool {
-	return h.entries[i].timestamp < h.entries[j].timestamp
+	return _itimediff(h.entries[i].seq, h.entries[j].seq) < 0
 }
 func (h nonceMinHeap) Swap(i, j int) { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
 
@@ -112,6 +117,8 @@ func (h *nonceMinHeap) Hash(nonce uint64) bool {
 
 func (h *nonceMinHeap) Push(x interface{}) {
 	entry := x.(nonceEntry)
+	entry.seq = h.nextSeq
+	h.nextSeq++
 	h.ensureNonceMap()
 	h.entries = append(h.entries, entry)
 	h.nonceHashes[entry.hash] = struct{}{}
@@ -237,8 +244,8 @@ func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 		c.nonceMu.Unlock()
 		return nil, fmt.Errorf("replay attack detected: duplicate nonce")
 	}
-	// Store nonce with timestamp
-	heap.Push(c.nonceHeap, nonceEntry{hash: nonceHash, timestamp: env.SecureData.Timestamp})
+	// Store nonce
+	heap.Push(c.nonceHeap, nonceEntry{hash: nonceHash})
 	// Clean up old nonces if the window is exceeded
 	c.pruneOldNonces()
 	c.nonceMu.Unlock()

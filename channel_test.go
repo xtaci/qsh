@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"container/heap"
+	"encoding/binary"
 	"io"
 	"net"
 	"sync"
@@ -144,7 +145,7 @@ func TestNoncePruning(t *testing.T) {
 	// Preload nonce cache to its window size limit
 	serverChannel.nonceMu.Lock()
 	for i := 0; i < nonceWindowSize; i++ {
-		heap.Push(serverChannel.nonceHeap, nonceEntry{hash: uint64(i + 1), timestamp: int64(i)})
+		heap.Push(serverChannel.nonceHeap, nonceEntry{hash: uint64(i + 1)})
 	}
 	serverChannel.nonceMu.Unlock()
 
@@ -460,4 +461,32 @@ func BenchmarkTransportSendReceive(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestNonceHeapPruningFIFO(t *testing.T) {
+	h := newNonceMinHeap()
+
+	// Push nonceWindowSize + 10 entries
+	count := nonceWindowSize + 10
+
+	for i := 0; i < count; i++ {
+		nonce := make([]byte, 16)
+		binary.BigEndian.PutUint64(nonce, uint64(i))
+		hash := hashNonceValue(nonce)
+		heap.Push(h, nonceEntry{hash: hash})
+
+		// Simulate pruning logic
+		if h.Len() > nonceWindowSize {
+			heap.Pop(h)
+		}
+	}
+
+	require.Equal(t, nonceWindowSize, h.Len())
+
+	// The remaining entries should be the last nonceWindowSize entries pushed.
+	// Since we popped 10 times, and we pushed in order, the first 10 (seq 0 to 9) should be gone.
+	// The smallest seq remaining should be 10.
+
+	minEntry := heap.Pop(h).(nonceEntry)
+	require.Equal(t, uint32(10), minEntry.seq)
 }
