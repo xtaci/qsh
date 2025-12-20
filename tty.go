@@ -26,7 +26,7 @@ func (s *clientSession) startInteractiveShell() error {
 	}
 
 	// Send initial terminal size
-	rows, cols := s.getWinsize()
+	rows, cols := s.getWinSize()
 	_ = s.Channel.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 
 	done := make(chan struct{})
@@ -90,14 +90,14 @@ func (s *clientSession) handleClientResize(done <-chan struct{}) {
 		case <-done:
 			return
 		case <-sigCh:
-			rows, cols := s.getWinsize()
+			rows, cols := s.getWinSize()
 			_ = s.Channel.Send(&protocol.PlainPayload{Resize: &protocol.Resize{Rows: uint32(rows), Cols: uint32(cols)}})
 		}
 	}
 }
 
-// getWinsize returns the caller TTY dimensions, falling back to 80x24.
-func (s *clientSession) getWinsize() (rows, cols uint16) {
+// getWinSize returns the caller TTY dimensions, falling back to 80x24.
+func (s *clientSession) getWinSize() (rows, cols uint16) {
 	w, h, err := term.GetSize(int(os.Stdin.Fd()))
 	if err != nil {
 		return 24, 80
