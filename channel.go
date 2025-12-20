@@ -159,6 +159,7 @@ func newEncryptedChannel(conn Connection, sendPad, recvPad *qpp.QuantumPermutati
 // Send marshals a PlainPayload, encrypts it, and writes a SecureData envelope.
 // Calls are serialized because QPP mutates its internal pad state per use.
 func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
+	// Check closed state
 	c.closeMu.Lock()
 	if c.closed {
 		c.closeMu.Unlock()
@@ -166,13 +167,16 @@ func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
 	}
 	c.closeMu.Unlock()
 
+	// Marshal PlainPayload
 	if payload == nil {
 		return fmt.Errorf("payload is nil")
 	}
+
 	plain, err := proto.Marshal(payload)
 	if err != nil {
 		return err
 	}
+
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
@@ -203,6 +207,7 @@ func (c *encryptedChannel) Send(payload *protocol.PlainPayload) error {
 // Receive blocks for the next SecureData envelope, decrypts it, and returns the
 // embedded PlainPayload after verifying its MAC and checking for replay attacks.
 func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
+	// Check closed state
 	c.closeMu.Lock()
 	if c.closed {
 		c.closeMu.Unlock()
@@ -212,6 +217,8 @@ func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 
 	c.recvMu.Lock()
 	defer c.recvMu.Unlock()
+
+	// Read next message
 	env := &protocol.Envelope{}
 	if err := protocol.ReadMessage(c.conn, env); err != nil {
 		return nil, err
@@ -233,28 +240,33 @@ func (c *encryptedChannel) Recv() (*protocol.PlainPayload, error) {
 	if env.SecureData.Timestamp-now > maxPacketAge {
 		return nil, fmt.Errorf("packet from the future (timestamp %d, now %d)", env.SecureData.Timestamp, now)
 	}
-
-	// Check nonce for replay detection
 	if len(env.SecureData.Nonce) != nonceSize {
 		return nil, fmt.Errorf("invalid nonce size: %d", len(env.SecureData.Nonce))
 	}
+
+	// Check nonce for replay attacks
 	nonceHash := hashNonceValue(env.SecureData.Nonce)
 	c.nonceMu.Lock()
 	if c.nonceHeap.Hash(nonceHash) {
 		c.nonceMu.Unlock()
 		return nil, fmt.Errorf("replay attack detected: duplicate nonce")
 	}
+
 	// Store nonce
 	heap.Push(c.nonceHeap, nonceEntry{hash: nonceHash})
+
 	// Clean up old nonces if the window is exceeded
 	c.pruneOldNonces()
 	c.nonceMu.Unlock()
 
+	// Decrypt and verify MAC
 	plain := c.decryptBuffer(env.SecureData.Ciphertext)
 	expected := c.computePayloadHMAC(c.recvMacKey, plain, env.SecureData.Nonce, env.SecureData.Timestamp)
 	if !hmac.Equal(expected, env.SecureData.Mac) {
 		return nil, fmt.Errorf("payload hmac mismatch")
 	}
+
+	// Unmarshal PlainPayload
 	payload := &protocol.PlainPayload{}
 	if err := proto.Unmarshal(plain, payload); err != nil {
 		return nil, err
