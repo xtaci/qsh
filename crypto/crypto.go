@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/awnumar/memguard"
 	"github.com/xtaci/hppk"
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
@@ -26,28 +27,34 @@ func LoadPrivateKey(path string) (*hppk.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	fileBuf := memguard.NewBufferFromBytes(data)
+	defer fileBuf.Destroy()
+
 	var encrypted encryptedKeyFile
-	if err := json.Unmarshal(data, &encrypted); err == nil && encrypted.Type == EncryptedKeyType {
-		pass, err := PromptPassword(fmt.Sprintf("Enter passphrase for %s: ", path), false)
+	if err := json.Unmarshal(fileBuf.Bytes(), &encrypted); err == nil && encrypted.Type == EncryptedKeyType {
+		passBuf, err := PromptPassword(fmt.Sprintf("Enter passphrase for %s: ", path), false)
 		if err != nil {
 			return nil, err
 		}
-		if len(pass) == 0 {
+		defer passBuf.Destroy()
+
+		if passBuf.Size() == 0 {
 			return nil, errors.New("passphrase required to decrypt private key")
 		}
-		defer clear(pass)
-		plain, err := decryptPrivateKey(&encrypted, pass)
+		plainBuf, err := decryptPrivateKey(&encrypted, passBuf)
 		if err != nil {
 			return nil, err
 		}
+		defer plainBuf.Destroy()
+
 		var priv hppk.PrivateKey
-		if err := json.Unmarshal(plain, &priv); err != nil {
+		if err := json.Unmarshal(plainBuf.Bytes(), &priv); err != nil {
 			return nil, err
 		}
 		return &priv, nil
 	}
 	var priv hppk.PrivateKey
-	if err := json.Unmarshal(data, &priv); err != nil {
+	if err := json.Unmarshal(fileBuf.Bytes(), &priv); err != nil {
 		return nil, err
 	}
 	return &priv, nil
@@ -68,7 +75,7 @@ func LoadPublicKey(path string) (*hppk.PublicKey, error) {
 }
 
 // GenerateKeyPair creates a new HPPK keypair, optionally encrypts the private key, and persists both halves.
-func GenerateKeyPair(path string, strength int, passphrase []byte) error {
+func GenerateKeyPair(path string, strength int, passphrase *memguard.LockedBuffer) error {
 	if path == "" {
 		return errors.New("genkey requires a target path")
 	}
@@ -80,7 +87,7 @@ func GenerateKeyPair(path string, strength int, passphrase []byte) error {
 		return err
 	}
 	var privatePayload any
-	if len(passphrase) == 0 {
+	if passphrase == nil || passphrase.Size() == 0 {
 		privatePayload = priv
 	} else {
 		encBlob, err := encryptPrivateKey(priv, passphrase)
@@ -130,20 +137,22 @@ type encryptedKeyFile struct {
 }
 
 // encryptPrivateKey encrypts an HPPK private key using the given passphrase.
-func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyFile, error) {
-	if len(passphrase) == 0 {
+func encryptPrivateKey(priv *hppk.PrivateKey, passphrase *memguard.LockedBuffer) (*encryptedKeyFile, error) {
+	if passphrase.Size() == 0 {
 		return nil, errors.New("empty passphrase not allowed")
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	key, err := scrypt.Key(passphrase, salt, ScryptCostN, ScryptCostR, ScryptCostP, 32)
+	key, err := scrypt.Key(passphrase.Bytes(), salt, ScryptCostN, ScryptCostR, ScryptCostP, 32)
 	if err != nil {
 		return nil, err
 	}
-	defer clear(key)
-	block, err := aes.NewCipher(key)
+	keyBuf := memguard.NewBufferFromBytes(key)
+	defer keyBuf.Destroy()
+
+	block, err := aes.NewCipher(keyBuf.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +168,10 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 	if err != nil {
 		return nil, err
 	}
-	ciphertext := gcm.Seal(nil, nonce, plain, nil)
-	clear(plain)
+	plainBuf := memguard.NewBufferFromBytes(plain)
+	defer plainBuf.Destroy()
+
+	ciphertext := gcm.Seal(nil, nonce, plainBuf.Bytes(), nil)
 	return &encryptedKeyFile{
 		Type:       EncryptedKeyType,
 		Version:    1,
@@ -176,7 +187,7 @@ func encryptPrivateKey(priv *hppk.PrivateKey, passphrase []byte) (*encryptedKeyF
 }
 
 // decryptPrivateKey decrypts an encrypted private key file using the given passphrase.
-func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error) {
+func decryptPrivateKey(enc *encryptedKeyFile, passphrase *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
 	if enc.KDF != KdfName {
 		return nil, fmt.Errorf("unsupported kdf %s", enc.KDF)
 	}
@@ -190,12 +201,14 @@ func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error)
 	if p == 0 {
 		p = ScryptCostP
 	}
-	key, err := scrypt.Key(passphrase, enc.Salt, N, r, p, 32)
+	key, err := scrypt.Key(passphrase.Bytes(), enc.Salt, N, r, p, 32)
 	if err != nil {
 		return nil, err
 	}
-	defer clear(key)
-	block, err := aes.NewCipher(key)
+	keyBuf := memguard.NewBufferFromBytes(key)
+	defer keyBuf.Destroy()
+
+	block, err := aes.NewCipher(keyBuf.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -210,34 +223,35 @@ func decryptPrivateKey(enc *encryptedKeyFile, passphrase []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	return plain, nil
+	return memguard.NewBufferFromBytes(plain), nil
 }
 
 // PromptPassword prompts the user for a password, optionally confirming it.
-func PromptPassword(prompt string, confirm bool) ([]byte, error) {
+func PromptPassword(prompt string, confirm bool) (*memguard.LockedBuffer, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	pass, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return nil, err
 	}
+	buf := memguard.NewBufferFromBytes(pass)
 	if confirm {
 		fmt.Fprint(os.Stderr, "Confirm passphrase: ")
 		confirmPass, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
-			clear(pass)
-			clear(confirmPass)
+			buf.Destroy()
 			return nil, err
 		}
-		if !bytes.Equal(pass, confirmPass) {
-			clear(pass)
-			clear(confirmPass)
+		confBuf := memguard.NewBufferFromBytes(confirmPass)
+		defer confBuf.Destroy()
+
+		if !bytes.Equal(buf.Bytes(), confBuf.Bytes()) {
+			buf.Destroy()
 			return nil, errors.New("passphrases do not match")
 		}
-		clear(confirmPass)
 	}
-	return pass, nil
+	return buf, nil
 }
 
 // DeriveDirectionalSeed deterministically expands the shared master secret per direction.

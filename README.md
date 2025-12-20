@@ -25,6 +25,7 @@ Key Features
 - **Proto-framed control channel** – all signaling (hello, challenges, resize notices, encrypted data) rides over a length-prefixed protobuf envelope defined in `protocol/`.
 - **True terminal UX** – the server spawns a PTY via `/bin/sh`, mirrors stdout/stderr, and honors window resize events.
 - **Built-in key management** – run `qsh genkey -o <path>` to create JSON-encoded private/public key files (private halves are encrypted with a passphrase).
+- **Memory Protection** – uses `memguard` to securely handle private keys and passphrases in memory, preventing swap leaks and core dump exposure.
 
 Quick Start
 -----------

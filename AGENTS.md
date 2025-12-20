@@ -33,6 +33,7 @@ The project follows a modular architecture:
     *   **Integrity**: Uses HMAC-SHA256 to verify message authenticity.
     *   **Replay Protection**: Uses a combination of timestamp validation (rejecting old/future packets) and a sliding window of nonces (using a min-heap) to prevent replay attacks.
 *   **`crypto/`**: Contains helper functions for HPPK key loading, signature handling, and padding.
+    *   **Memory Protection**: Uses `memguard` to protect private keys and passphrases in memory, preventing them from being swapped to disk or exposed in core dumps.
 
 ### 4. Session Management (`session.go`)
 *   **Handshake**: Implements the multi-step handshake protocol to establish a secure session.
@@ -71,6 +72,7 @@ The project follows a modular architecture:
 *   **Dependencies**:
     *   `github.com/xtaci/hppk`: Authentication & Key Exchange.
     *   `github.com/xtaci/qpp`: Symmetric Encryption.
+    *   `github.com/awnumar/memguard`: Secure memory management for sensitive data.
     *   `github.com/urfave/cli/v2`: CLI framework.
     *   `google.golang.org/protobuf`: Protocol Buffers.
     *   `github.com/creack/pty`: PTY handling.

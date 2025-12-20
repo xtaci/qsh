@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/awnumar/memguard"
 	cli "github.com/urfave/cli/v2"
 	qcrypto "github.com/xtaci/qsh/crypto"
 )
@@ -18,6 +19,7 @@ const (
 
 // main dispatches between key generation, server mode, and client mode.
 func main() {
+	memguard.CatchInterrupt()
 	app := &cli.App{
 		Name:  "qsh",
 		Usage: "Secure remote shell using HPPK authentication and QPP encryption (client by default)",
@@ -81,8 +83,8 @@ func runGenKeyCommand(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	defer clear(pass)
-	if len(pass) == 0 {
+	defer pass.Destroy()
+	if pass.Size() == 0 {
 		fmt.Fprintln(os.Stderr, "Warning: storing private key without encryption; protect the file permissions carefully.")
 	}
 	if err := qcrypto.GenerateKeyPair(path, strength, pass); err != nil {
