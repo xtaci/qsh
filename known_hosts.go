@@ -35,10 +35,10 @@ func ensureTrustedHost(host string, pub *hppk.PublicKey) error {
 		return err
 	}
 	if known, ok := existing[host]; ok {
-		if known != fingerprint {
-			return fmt.Errorf("host %s key mismatch (known %s, got %s)", host, known, fingerprint)
+		if known == fingerprint {
+			return nil
 		}
-		return nil
+		return fmt.Errorf("host %s key mismatch (known %s, got %s)", host, known, fingerprint)
 	}
 	accepted, err := promptHostApproval(host, fingerprint)
 	if err != nil {

@@ -273,21 +273,21 @@ func deriveKeyMaterial(master []byte, label string, size int) ([]byte, error) {
 	return out, nil
 }
 
-// MarshalPublicKey serializes an HPPK public key to canonical JSON.
+// MarshalPublicKey serializes an HPPK public key using its binary representation.
 func MarshalPublicKey(pub *hppk.PublicKey) ([]byte, error) {
 	if pub == nil {
 		return nil, errors.New("public key is nil")
 	}
-	return json.Marshal(pub)
+	return pub.MarshalBinary()
 }
 
-// UnmarshalPublicKey decodes an HPPK public key from JSON.
+// UnmarshalPublicKey decodes an HPPK public key from its binary form.
 func UnmarshalPublicKey(data []byte) (*hppk.PublicKey, error) {
 	if len(data) == 0 {
 		return nil, errors.New("public key payload is empty")
 	}
 	var pub hppk.PublicKey
-	if err := json.Unmarshal(data, &pub); err != nil {
+	if err := pub.UnmarshalBinary(data); err != nil {
 		return nil, err
 	}
 	return &pub, nil
