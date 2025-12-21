@@ -98,11 +98,12 @@ qsh
 
 协议流程概览
 -----------------
-1. **ClientHello**：客户端上送自身 ID。
-2. **AuthChallenge**：服务器返回随机质询、KEM 封装的会话种子以及素数密码本参数。
-3. **AuthResponse**：客户端用 HPPK 私钥对质询签名，证明控制权。
-4. **AuthResult**：验证通过后，双方使用 HKDF 派生 `qsh-c2s`、`qsh-s2c`，并初始化各自的 QPP pad。
-5. **SecureData**：所有 PTY 数据与窗口事件以 `PlainPayload` 表示，经加密后成为 `SecureData` 在通道中流转，直至会话结束。
+1. **ClientHello**：客户端上送自身 ID，并附带随机 `ServerChallenge`，用于要求服务器证明身份。
+2. **ServerHello**：服务器回传主机公钥及对 `ClientHello` 的签名，客户端可与 `known_hosts` 指纹比对（或首次信任后记录），确认对端合法。
+3. **AuthChallenge**：服务器返回随机质询、KEM 封装的会话种子以及素数密码本参数。
+4. **AuthResponse**：客户端用 HPPK 私钥对质询签名，证明控制权。
+5. **AuthResult**：验证通过后，双方使用 HKDF 派生 `qsh-c2s`、`qsh-s2c`，并初始化各自的 QPP pad。
+6. **SecureData**：所有 PTY 数据与窗口事件以 `PlainPayload` 表示，经加密后成为 `SecureData` 在通道中流转，直至会话结束。
 
 开发者笔记
 ---------------

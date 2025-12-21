@@ -98,11 +98,12 @@ Instead of listing every `--client` flag on the command line, the server can loa
 
 Protocol Highlights
 -------------------
-1. **ClientHello** – announces a client ID.
-2. **AuthChallenge** – server returns a random challenge, KEM-wrapped session seed, and the negotiated prime pad count.
-3. **AuthResponse** – client signs the challenge with its HPPK private key and proves possession.
-4. **AuthResult** – server verifies the signature before both sides derive directional seeds (`qsh-c2s`, `qsh-s2c`) via HKDF and instantiate QPP pads.
-5. **Secure streaming** – plaintext PTY data and resize events are wrapped inside `PlainPayload`, encrypted into `SecureData`, and exchanged until either side disconnects.
+1. **ClientHello** – announces a client ID and embeds a fresh server challenge so the client can demand proof of identity in the next step.
+2. **ServerHello** – the server responds with its public key and signature; the client checks the fingerprint against `known_hosts` (or accepts and records a new one) to confirm it is talking to the expected peer.
+3. **AuthChallenge** – server returns a random challenge, KEM-wrapped session seed, and the negotiated prime pad count.
+4. **AuthResponse** – client signs the challenge with its HPPK private key and proves possession.
+5. **AuthResult** – server verifies the signature before both sides derive directional seeds (`qsh-c2s`, `qsh-s2c`) via HKDF and instantiate QPP pads.
+6. **Secure streaming** – plaintext PTY data and resize events are wrapped inside `PlainPayload`, encrypted into `SecureData`, and exchanged until either side disconnects.
 
 Development Notes
 -----------------
