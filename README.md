@@ -18,6 +18,8 @@ Overview
 --------
 `qsh` is a Go-based secure remote shell that mirrors an SSH login experience while relying on two research projects from the same author: [HPPK](https://github.com/xtaci/hppk) for post-quantum-friendly authentication and [QPP](https://github.com/xtaci/qpp) for stream encryption. The binary exposes both a server and client mode, plus a helper for generating compatible keypairs.
 
+![Handshake Diagram](assets/handshake.jpg)
+
 Key Features
 ------------
 - **Strong authentication** – servers whitelist client IDs and verify HPPK signatures produced during the handshake.
