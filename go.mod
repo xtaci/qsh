@@ -3,6 +3,7 @@ module github.com/xtaci/qsh
 go 1.25.4
 
 require (
+	github.com/awnumar/memguard v0.23.0
 	github.com/creack/pty v1.1.24
 	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.9.0
@@ -15,7 +16,6 @@ require (
 
 require (
 	github.com/awnumar/memcall v0.4.0 // indirect
-	github.com/awnumar/memguard v0.23.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/kr/pretty v0.2.1 // indirect
